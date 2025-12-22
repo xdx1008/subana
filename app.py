@@ -14,12 +14,23 @@ LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 # 頁面設定
 st.set_page_config(page_title="Subana", page_icon="🎬", layout="wide")
 
-# --- CSS 優化 ---
+# --- CSS 優化 (修復遮擋問題) ---
 st.markdown("""
 <style>
+    /* === 1. 解決遮擋問題的核心修正 === */
+    .block-container { 
+        padding-top: 4.5rem !important; /* 加大頂部間距，避開 Streamlit Header */
+        padding-bottom: 5rem;
+    }
+    
+    /* 如果您想完全隱藏上方的 Streamlit 設定條 (紅線與漢堡選單)，請取消下面這行的註解 */
+    /* header { visibility: hidden; } */
+
+    /* === 2. 全域樣式 === */
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
+    /* 狀態卡片 */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -27,24 +38,41 @@ st.markdown("""
     .dot-green { background-color: #30d158; box-shadow: 0 0 8px rgba(48, 209, 88, 0.4); }
     .dot-red { background-color: #ff453a; box-shadow: 0 0 8px rgba(255, 69, 58, 0.4); }
 
+    /* 按鈕 */
     .stButton button { border-radius: 8px !important; font-weight: 500; border: none; transition: transform 0.1s; }
     .stButton button:active { transform: scale(0.98); }
 
+    /* 容器與卡片 */
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
+    /* 標籤 */
     .type-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; width: 60px; text-align: center; letter-spacing: 0.5px; }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
-    .log-terminal { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11px; line-height: 1.5; background-color: #0d1117; color: #c9d1d9; padding: 15px; border-radius: 8px; height: 250px; overflow-y: auto; border: 1px solid #30363d; display: flex; flex-direction: column; }
+    /* Log 終端機樣式 */
+    .log-terminal { 
+        font-family: 'SF Mono', 'Menlo', monospace; 
+        font-size: 11px; 
+        line-height: 1.5; 
+        background-color: #0d1117; 
+        color: #c9d1d9; 
+        padding: 15px; 
+        border-radius: 8px; 
+        height: 200px; 
+        overflow-y: auto; 
+        border: 1px solid #30363d; 
+        display: flex; 
+        flex-direction: column; 
+        margin-top: 5px; /* 增加一點與 expander 標題的距離 */
+    }
     .log-line { padding: 4px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; line-height: 1.4; }
     .log-line:last-child { border-bottom: none; }
     .log-line:nth-child(even) { background-color: rgba(255,255,255,0.02); }
 
-    .block-container { padding-top: 2rem; }
     .detail-text { font-family: monospace; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.85em; color: #eee; }
     
-    /* 隱藏原生 Spinner 以避免每 2 秒閃爍一次 */
+    /* 隱藏原生 Spinner */
     [data-testid="stStatusWidget"] { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -152,7 +180,8 @@ with st.sidebar:
 # 🔥 Log 區塊 (置頂 + 自動刷新 + 自動清理)
 @st.fragment(run_every=1)
 def log_section():
-    with st.expander("💻 系統終端機 (System Log)", expanded=False):
+    # expanded=True 預設展開
+    with st.expander("💻 系統終端機 (System Log)", expanded=True):
         log_html = manage_log_file(max_lines=100)
         st.markdown(f'<div class="log-terminal">{log_html}</div>', unsafe_allow_html=True)
 
@@ -160,28 +189,24 @@ log_section()
 
 st.subheader("📚 媒體庫 (Library)")
 
-# 篩選器 (位於 Fragment 外部，輸入時不會被打斷)
+# 篩選器 (Fragment 外部)
 col_filter, col_search = st.columns([1.5, 5])
 with col_filter:
     filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
 with col_search:
-    search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字搜尋...", label_visibility="collapsed")
+    search_query = st.text_input("搜尋媒體...", placeholder="搜尋關鍵字...", label_visibility="collapsed")
 
 # 🔥 媒體列表區塊 (自動刷新核心)
-# run_every=2: 每 2 秒自動重新讀取資料庫並更新這個區塊的 UI
 @st.fragment(run_every=2)
 def render_library_list(f_type, s_query):
-    # 獲取資料
     rows = get_all_media(f_type, s_query)
 
     if not rows:
         st.info("👋 資料庫目前是空的，請在左側點擊 **「🚀 開始全域掃描」**。")
         return
 
-    # 顯示計數 (方便確認是否有新增)
     st.caption(f"共 {len(rows)} 個項目 (Auto Refreshing...)")
     
-    # 列表渲染
     for row in rows:
         with st.container(border=True):
             c1, c2, c3, c4, c5 = st.columns([0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
@@ -201,7 +226,6 @@ def render_library_list(f_type, s_query):
             # 4. 更新按鈕
             if c4.button("更新", key=f"upd_{row['id']}", use_container_width=True):
                 st.toast(f"正在更新: {row['name']}...", icon="🔄")
-                # 更新操作不應依賴 URL 參數傳遞，直接讀取全域 config
                 threading.Thread(target=run_single_refresh, 
                                  args=(config['url'], config['token'], row['id'])).start()
             
@@ -209,5 +233,4 @@ def render_library_list(f_type, s_query):
             if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 
-# 呼叫列表渲染函式 (將外部篩選條件傳入)
 render_library_list(filter_type, search_query)

@@ -17,6 +17,7 @@ logging.basicConfig(
 )
 
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.wmv')
+# 定義支援的外部字幕格式
 SUB_EXTS = ('.srt', '.ass', '.ssa', '.vtt', '.sub')
 
 class AlistClient:
@@ -47,16 +48,19 @@ class AlistClient:
         return None
 
 def has_chinese_embedded(file_url):
-    """分析內嵌字幕，回傳 (是否包含中文, 軌道資訊字串)"""
+    """
+    分析內嵌字幕 (當沒有外部字幕時才會執行此函式)
+    """
     cmd = ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-select_streams", "s", file_url]
     try:
-        # 設定 15秒 超時，避免卡死
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        # 設定 20秒 超時
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         if result.returncode != 0: return False, "Format Error"
         
         info = json.loads(result.stdout)
         streams = info.get('streams', [])
         
+        # 內嵌字幕關鍵字
         keywords = ['chi', 'zho', 'chinese', 'cht', 'chs', '繁體', '简体', 'mandarin', 'zh-tw', 'zh-cn']
         
         track_info = []
@@ -79,89 +83,99 @@ def has_chinese_embedded(file_url):
 
 def check_external_sub(video_name, all_files):
     """
-    檢查是否有對應的外部字幕
-    規則：字幕檔名 必須包含 影片檔名(不含副檔名)
+    🔥 核心邏輯：檢查同目錄下是否有對應的外部字幕
+    video_name: S01E01.mkv
+    all_files: 目錄下的檔案列表
     """
+    # 取得檔名主體 (S01E01)
     video_base = os.path.splitext(video_name)[0]
+    
     for f in all_files:
         if f['is_dir']: continue
-        if f['name'].lower().endswith(SUB_EXTS):
-            if video_base in f['name']:
-                return True, f['name']
+        fname = f['name']
+        
+        # 必須是字幕副檔名
+        if fname.lower().endswith(SUB_EXTS):
+            # 必須包含影片主檔名 (例如 S01E01.chi.srt 包含 S01E01)
+            if video_base in fname:
+                return True, fname
+                
     return False, None
-
-# --- 處理核心 (回傳 JSON 結構) ---
 
 def process_folder_videos(client, full_path, all_files):
     """
-    處理一個資料夾內的所有影片
-    回傳: List of Episode Objects
+    處理資料夾內的所有影片
+    邏輯：外部字幕優先 -> 有則跳過 -> 無則檢查內嵌
     """
     results = []
     video_files = [f for f in all_files if not f['is_dir'] and f['name'].lower().endswith(VIDEO_EXTS)]
-    # 排序影片 (S01E01, S01E02...)
     video_files.sort(key=lambda x: x['name'])
 
     for vid in video_files:
         ep_name = vid['name']
         logging.info(f"      Checking: {ep_name} ...")
         
-        # 1. 優先檢查外部字幕 (速度快)
+        # === 1. 優先檢查外部字幕 ===
         has_ext, ext_name = check_external_sub(ep_name, all_files)
         
         if has_ext:
-            # 有外部字幕，直接通過，不跑 ffprobe
+            logging.info(f"         ✅ 找到外部字幕: {ext_name} (跳過內嵌分析)")
             results.append({
                 "name": ep_name,
                 "status": "ok",
                 "type": "external",
-                "detail": ext_name
+                "detail": f"[外部] {ext_name}" # 加上標記讓 app.py 識別
             })
-        else:
-            # 2. 沒有外部，必須檢查內嵌
-            raw_url = client.get_raw_url(posixpath.join(full_path, ep_name))
-            if raw_url:
-                has_emb, track_info = has_chinese_embedded(raw_url)
-                if has_emb:
-                    results.append({
-                        "name": ep_name,
-                        "status": "ok",
-                        "type": "embedded",
-                        "detail": track_info
-                    })
-                else:
-                    # 失敗：無外部且內嵌無中文
-                    results.append({
-                        "name": ep_name,
-                        "status": "missing",
-                        "detail": track_info if track_info else "No subs found"
-                    })
+            # 🔥 關鍵：找到外部字幕就直接換下一集，不跑下面的 ffprobe
+            continue 
+        
+        # === 2. 無外部字幕，開始分析內嵌 ===
+        logging.info(f"         ⚠️ 無外部字幕，開始分析內嵌...")
+        raw_url = client.get_raw_url(posixpath.join(full_path, ep_name))
+        
+        if raw_url:
+            has_emb, track_info = has_chinese_embedded(raw_url)
+            if has_emb:
+                logging.info(f"         ✅ 內嵌包含中文")
+                results.append({
+                    "name": ep_name,
+                    "status": "ok",
+                    "type": "embedded",
+                    "detail": f"[內嵌] {track_info}"
+                })
             else:
-                results.append({"name": ep_name, "status": "error", "detail": "Link Error"})
+                logging.warning(f"         ❌ 缺字幕")
+                results.append({
+                    "name": ep_name,
+                    "status": "missing",
+                    "detail": track_info if track_info else "No subs found"
+                })
+        else:
+            results.append({"name": ep_name, "status": "error", "detail": "Link Error"})
                 
     return results
 
+# --- 處理電影 ---
 def process_movie_item(client, drive_id, m_name, m_full_path):
     logging.info(f"   🎥 分析電影: {m_name}")
     files = client.list_files(m_full_path)
     if not files: return False
 
-    # 雖然電影通常只有一個檔，但邏輯共用
     episodes = process_folder_videos(client, m_full_path, files)
     
     if episodes:
-        # 將 List 轉為 JSON 字串存入 DB
         json_str = json.dumps(episodes)
         save_media('movie', drive_id, m_name, m_full_path, [{'season': 'Movie', 'subs': json_str}])
         return True
     return False
 
+# --- 處理劇集 ---
 def process_tv_item(client, drive_id, t_name, t_full_path):
     logging.info(f"   📺 分析劇集: {t_name}")
     seasons = client.list_files(t_full_path)
     if not seasons: return False
 
-    season_data = [] # 準備存入 DB
+    season_data = []
     
     for s in seasons:
         if not s['is_dir']: continue
@@ -172,9 +186,9 @@ def process_tv_item(client, drive_id, t_name, t_full_path):
         s_files = client.list_files(s_path)
         if not s_files: continue
 
-        logging.info(f"    👉 Season: {s_name}")
+        logging.info(f"    👉 {s_name}")
         
-        # 全量掃描該季所有影片
+        # 呼叫共用邏輯，傳入該季的所有檔案
         episodes = process_folder_videos(client, s_path, s_files)
         
         if episodes:
@@ -186,7 +200,7 @@ def process_tv_item(client, drive_id, t_name, t_full_path):
         return True
     return False
 
-# --- 主任務 (與 v7 相同，僅呼叫上方新邏輯) ---
+# --- 主任務 ---
 def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
     client = AlistClient(alist_url, token)
     logging.info("="*40)

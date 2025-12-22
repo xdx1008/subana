@@ -19,7 +19,6 @@ logging.basicConfig(
 
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.wmv')
 SUB_EXTS = ('.srt', '.ass', '.ssa', '.vtt', '.sub')
-# 正則表達式：匹配 S01E01 或 s1e1
 REGEX_SEASON_EP = re.compile(r"[sS](\d{1,3})[eE](\d{1,3})")
 
 class AlistClient:
@@ -50,15 +49,22 @@ class AlistClient:
         return None
 
     def rename(self, path, new_name):
-        """Alist Rename API"""
         try:
             url = f"{self.url}/api/fs/rename"
             body = {"path": path, "name": new_name}
             resp = requests.post(url, headers=self.headers, json=body)
+            return resp.json().get('code') == 200
+        except: return False
+
+    def copy(self, src_dir, dst_dir, file_names):
+        try:
+            url = f"{self.url}/api/fs/copy"
+            body = {"src_dir": src_dir, "dst_dir": dst_dir, "names": file_names}
+            resp = requests.post(url, headers=self.headers, json=body)
             data = resp.json()
-            return data.get('code') == 200
+            return data.get('code') == 200 
         except Exception as e:
-            logging.error(f"Rename Error: {e}")
+            logging.error(f"Copy Error: {e}")
             return False
 
 def has_chinese_embedded(file_url):
@@ -104,7 +110,6 @@ def process_folder_videos(client, full_path, all_files):
         ep_name = vid['name']
         logging.info(f"      Checking: {ep_name} ...")
         
-        # 1. 外部字幕
         has_ext, ext_name = check_external_sub(ep_name, all_files)
         
         if has_ext:
@@ -117,7 +122,6 @@ def process_folder_videos(client, full_path, all_files):
             })
             continue 
         
-        # 2. 內嵌字幕
         logging.info(f"         ⚠️ 無外部字幕，檢查內嵌...")
         raw_url = client.get_raw_url(posixpath.join(full_path, ep_name))
         
@@ -166,12 +170,9 @@ def process_tv_item(client, drive_id, t_name, t_full_path):
         return True
     return False
 
-# --- 🔥 新增：字幕修復邏輯 ---
+# --- 字幕修復與匯入 ---
+
 def fix_subtitle_names(client, folder_path):
-    """
-    自動對齊字幕檔名
-    回傳: (success_count, logs list)
-    """
     logs = []
     files = client.list_files(folder_path)
     if not files: return 0, ["無法讀取目錄"]
@@ -181,34 +182,29 @@ def fix_subtitle_names(client, folder_path):
     
     renamed_count = 0
 
-    # 1. 電影模式：1個影片 + 1個字幕
+    # 1. 電影模式
     if len(videos) == 1 and len(subs) == 1:
-        vid = videos[0]
-        sub = subs[0]
+        vid = videos[0]; sub = subs[0]
         vid_base = os.path.splitext(vid['name'])[0]
         sub_ext = os.path.splitext(sub['name'])[1]
         
-        # 如果字幕檔名不包含影片檔名，則改名
         if vid_base not in sub['name']:
-            new_name = f"{vid_base}{sub_ext}" # 直接改成 Video.srt
+            new_name = f"{vid_base}{sub_ext}"
             full_path = posixpath.join(folder_path, sub['name'])
             if client.rename(full_path, new_name):
-                logs.append(f"✅ 修復: {sub['name']} -> {new_name}")
+                logs.append(f"✅ 改名: {sub['name']} -> {new_name}")
                 renamed_count += 1
-            else:
-                logs.append(f"❌ 失敗: {sub['name']}")
+            else: logs.append(f"❌ 改名失敗: {sub['name']}")
         return renamed_count, logs
 
-    # 2. 劇集模式：SxxExx 匹配
+    # 2. 劇集模式
     for vid in videos:
-        # 提取影片 S01E01
         match = REGEX_SEASON_EP.search(vid['name'])
         if not match: continue
         
-        season_ep_key = match.group(0).upper() # S01E01
+        season_ep_key = match.group(0).upper()
         vid_base = os.path.splitext(vid['name'])[0]
 
-        # 在字幕中尋找同樣包含 S01E01 的檔案
         target_sub = None
         for sub in subs:
             if season_ep_key in sub['name'].upper():
@@ -216,108 +212,130 @@ def fix_subtitle_names(client, folder_path):
                 break
         
         if target_sub:
-            # 如果已經對齊了，跳過
             if vid_base in target_sub['name']: continue
-            
-            # 準備改名
             sub_ext = os.path.splitext(target_sub['name'])[1]
-            new_name = f"{vid_base}{sub_ext}" # VideoName.srt
+            new_name = f"{vid_base}{sub_ext}"
             
-            # 檢查新檔名是否已存在 (避免覆蓋)
-            if any(f['name'] == new_name for f in files):
-                continue
+            if any(f['name'] == new_name for f in files): continue
 
             full_path = posixpath.join(folder_path, target_sub['name'])
             if client.rename(full_path, new_name):
-                logs.append(f"✅ 對齊: {target_sub['name']} -> {new_name}")
+                logs.append(f"✅ 改名: {target_sub['name']} -> {new_name}")
                 renamed_count += 1
-            else:
-                logs.append(f"❌ 失敗: {target_sub['name']}")
+            else: logs.append(f"❌ 改名失敗: {target_sub['name']}")
 
     return renamed_count, logs
+
+def import_subs_from_folder(alist_url, token, media_id, source_folder):
+    """
+    跨目錄匯入邏輯 (含同目錄防呆)
+    """
+    client = AlistClient(alist_url, token)
+    row = get_media_by_id(media_id)
+    if not row: return "找不到媒體"
+
+    logging.info(f"📂 [匯入] 從 {source_folder} 到 {row['name']}")
+    
+    # 正規化來源路徑 (去除結尾斜線，避免比對錯誤)
+    norm_src = source_folder.rstrip('/')
+
+    # 1. 取得來源字幕
+    src_files = client.list_files(source_folder)
+    subs_to_copy = [f['name'] for f in src_files if not f['is_dir'] and f['name'].lower().endswith(SUB_EXTS)]
+    
+    if not subs_to_copy:
+        return "❌ 來源目錄沒有字幕檔"
+
+    # 2. 決定目標目錄
+    targets = []
+    if row['type'] == 'movie':
+        targets.append(row['full_path'])
+    else:
+        sub_items = client.list_files(row['full_path'])
+        for item in sub_items:
+            if item['is_dir'] and ("Season" in item['name'] or "Specials" in item['name']):
+                targets.append(posixpath.join(row['full_path'], item['name']))
+    
+    if not targets:
+        return "❌ 找不到目標資料夾"
+
+    copied_count = 0
+    renamed_total = 0
+    
+    # 3. 處理每個目標資料夾
+    for target_dir in targets:
+        norm_target = target_dir.rstrip('/')
+        
+        # 🔥 防呆機制：如果是同一個目錄，跳過複製，直接修復
+        if norm_src == norm_target:
+            logging.info(f"   ℹ️ 來源與目標相同，跳過複製，直接執行改名修復: {target_dir}")
+            count, logs = fix_subtitle_names(client, target_dir)
+            renamed_total += count
+            for l in logs: logging.info(l)
+            continue
+
+        # 不同目錄 -> 執行複製 + 修復
+        logging.info(f"   📋 複製字幕到: {target_dir}")
+        if client.copy(source_folder, target_dir, subs_to_copy):
+            copied_count += len(subs_to_copy)
+            count, logs = fix_subtitle_names(client, target_dir)
+            renamed_total += count
+            for l in logs: logging.info(l)
+        else:
+            logging.error(f"   ❌ 複製失敗: {target_dir}")
+
+    # 4. 更新資料庫
+    run_single_refresh(alist_url, token, media_id)
+    
+    result_msg = ""
+    if copied_count > 0:
+        result_msg += f"已複製 {copied_count} 個檔案。"
+    if renamed_total > 0:
+        result_msg += f" 已修復 {renamed_total} 個檔名。"
+    if not result_msg:
+        result_msg = "操作完成 (無變更)"
+        
+    return result_msg
 
 # --- 任務接口 ---
 def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
     client = AlistClient(alist_url, token)
-    logging.info("="*40)
-    logging.info(f"🚀 開始全量掃描: {start_cloud_path}")
     drives = client.list_files(start_cloud_path)
     if not drives: return
     drive_list = sorted([d for d in drives if d['is_dir']], key=lambda x: x['name'])
     for drive in drive_list:
-        drive_id = drive['name']
-        drive_full_path = posixpath.join(start_cloud_path, drive_id)
-        logging.info(f"👉 Drive: {drive_id}")
+        drive_id = drive['name']; drive_full_path = posixpath.join(start_cloud_path, drive_id)
         sub_folders = client.list_files(drive_full_path)
         if not sub_folders: continue
         folder_map = {item['name'].lower(): item['name'] for item in sub_folders if item['is_dir']}
-        
         if 'movies' in folder_map:
-            m_path = posixpath.join(drive_full_path, folder_map['movies'])
-            m_list = client.list_files(m_path)
+            m_path = posixpath.join(drive_full_path, folder_map['movies']); m_list = client.list_files(m_path)
             if m_list:
                 for m in m_list:
                     if not m['is_dir']: continue
                     full = posixpath.join(m_path, m['name'])
                     if check_media_exists(full): continue
                     process_movie_item(client, drive_id, m['name'], full)
-
         if 'tv' in folder_map:
-            t_path = posixpath.join(drive_full_path, folder_map['tv'])
-            t_list = client.list_files(t_path)
+            t_path = posixpath.join(drive_full_path, folder_map['tv']); t_list = client.list_files(t_path)
             if t_list:
                 for t in t_list:
                     if not t['is_dir']: continue
                     full = posixpath.join(t_path, t['name'])
                     if check_media_exists(full): continue
                     process_tv_item(client, drive_id, t['name'], full)
-    logging.info("🏁 掃描結束！")
 
 def run_single_refresh(alist_url, token, media_id):
     client = AlistClient(alist_url, token)
     row = get_media_by_id(media_id)
     if not row: return
-    logging.info(f"🔄 [手動刷新] {row['name']}")
-    if row['type'] == 'movie':
-        process_movie_item(client, row['drive_id'], row['name'], row['full_path'])
-    elif row['type'] == 'tv':
-        process_tv_item(client, row['drive_id'], row['name'], row['full_path'])
-    logging.info("✅ 刷新完成")
+    if row['type'] == 'movie': process_movie_item(client, row['drive_id'], row['name'], row['full_path'])
+    elif row['type'] == 'tv': process_tv_item(client, row['drive_id'], row['name'], row['full_path'])
 
 def run_auto_fix(alist_url, token, media_id):
-    """執行自動修復並重掃"""
-    client = AlistClient(alist_url, token)
+    """(原地修復接口) - 呼叫 import_subs_from_folder 但來源=目標"""
     row = get_media_by_id(media_id)
-    if not row: return "找不到資料"
-    
-    total_renamed = 0
-    all_logs = []
-
-    logging.info(f"🛠️ [字幕修復] 開始: {row['name']}")
-
-    if row['type'] == 'movie':
-        count, logs = fix_subtitle_names(client, row['full_path'])
-        total_renamed += count
-        all_logs.extend(logs)
-    elif row['type'] == 'tv':
-        # 劇集需要進入每一季的資料夾
-        seasons = client.list_files(row['full_path'])
-        for s in seasons:
-            if not s['is_dir']: continue
-            if "Season" not in s['name'] and "Specials" not in s['name']: continue
-            
-            s_path = posixpath.join(row['full_path'], s['name'])
-            count, logs = fix_subtitle_names(client, s_path)
-            total_renamed += count
-            all_logs.extend(logs)
-
-    # 如果有變動，立即重掃資料庫
-    if total_renamed > 0:
-        logging.info("📝 偵測到檔名變更，立即更新資料庫...")
-        run_single_refresh(alist_url, token, media_id)
-    
-    result_msg = f"共修復 {total_renamed} 個檔案"
-    if all_logs:
-        for l in all_logs: logging.info(l)
-        
-    return result_msg
+    if not row: return "No Data"
+    # 直接使用我們剛改寫的 import 函式，傳入自身路徑，就會觸發防呆機制
+    # 注意：若是劇集，row['full_path'] 是劇集根目錄，import 函式會自動處理 Season 子目錄
+    return import_subs_from_folder(alist_url, token, media_id, row['full_path'])

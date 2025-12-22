@@ -82,12 +82,44 @@ if st.button("▶️ 立即手動執行一次", type="primary"):
 st.markdown("---")
 st.subheader("📜 執行日誌")
 
-log_placeholder = st.empty()
-if st.button("🔄 刷新日誌"):
-    log_placeholder.code(tail_log(), language="text")
-else:
-    log_placeholder.code(tail_log(), language="text")
+# 建立兩欄：左邊放開關，右邊放清除按鈕
+col_log1, col_log2 = st.columns([3, 1])
 
-if st.button("🗑️ 清除日誌"):
-    open(LOG_FILE, 'w').close()
-    st.rerun()
+# 使用 st.empty() 佔位，這是實現即時更新的關鍵
+log_placeholder = st.empty()
+
+# 放在側邊或上方的控制項
+with col_log1:
+    # 預設開啟即時監控
+    auto_scroll = st.toggle("🔴 啟用即時監控 (Real-time Log)", value=True)
+
+with col_log2:
+    if st.button("🗑️ 清除日誌"):
+        open(LOG_FILE, 'w').close()
+        st.rerun()
+
+# 讀取 Log 的函式
+def get_logs():
+    if os.path.exists(LOG_FILE):
+        # 讀取最後 50 行，避免介面卡頓
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+            return "".join(lines[-50:])
+    return "尚無日誌..."
+
+# --- 即時更新邏輯 ---
+if auto_scroll:
+    # 如果開啟開關，進入迴圈不斷更新
+    # 注意：Streamlit 的迴圈會持續運行，直到使用者關閉開關或離開頁面
+    while True:
+        log_content = get_logs()
+        # 更新內容
+        log_placeholder.code(log_content, language="text")
+        # 休息 1 秒 (避免 CPU 飆高)
+        time.sleep(1)
+        # 這是個小技巧，讓 Streamlit 知道要檢查 UI 互動狀態 (例如使用者是否關閉了開關)
+        # 雖然在 while loop 裡直接偵測變數有點難，但在 Streamlit 新版中，
+        # 只要頁面有互動，script 會重新執行，這裡的 loop 就會被中斷重來
+else:
+    # 如果沒開，就只顯示一次靜態內容
+    log_placeholder.code(get_logs(), language="text")

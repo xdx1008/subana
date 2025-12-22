@@ -3,20 +3,15 @@ import json
 import os
 import threading
 import time
-import sys # 引入 sys 以便查看路徑
-
-# --- 除錯區塊 (請注意這裡) ---
-try:
-    from streamlit_keyup import st_keyup
-except Exception as e:
-    # 這裡會顯示真正的錯誤原因
-    st.error(f"❌ 載入套件失敗: {e}")
-    st.code(f"Python Path: {sys.path}")
-    st.stop()
-# ---------------------------
-
 from database import get_all_media, get_subtitles, clear_db
 from logic import run_library_scan, run_single_refresh
+
+# 引入即時輸入監聽套件
+try:
+    from streamlit_keyup import st_keyup
+except ImportError:
+    st.error("請先安裝 streamlit-keyup 套件以啟用即時搜尋功能。")
+    st.stop()
 
 # 設定路徑
 DATA_DIR = '/app/data'
@@ -212,7 +207,7 @@ with col_filter:
     filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
 
 with col_search:
-    # 這裡如果 Import 失敗，程式會停在上方，不會跑到這裡
+    # 使用 st_keyup 實現即時過濾
     search_query = st_keyup("搜尋媒體...", placeholder="輸入關鍵字搜尋 (即時過濾)...", label_visibility="collapsed")
 
 @st.fragment(run_every=3)
@@ -230,25 +225,19 @@ def render_library_list(f_type, s_query):
             # 調整比例給 Badge 更多空間 (1.2)
             c1, c2, c3, c4, c5 = st.columns([1.2, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
-            # 1. 類型
             if row['type'] == 'movie':
                 c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else:
                 c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            # 2. 名稱
             c2.markdown(f"**{row['name']}**")
-            
-            # 3. 來源
             c3.caption(f"Drive {row['drive_id']}")
             
-            # 4. 更新按鈕
             if c4.button("更新", key=f"upd_{row['id']}", use_container_width=True):
                 st.toast(f"正在更新: {row['name']}...", icon="🔄")
                 threading.Thread(target=run_single_refresh, 
                                  args=(config['url'], config['token'], row['id'])).start()
             
-            # 5. 詳細按鈕
             if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 

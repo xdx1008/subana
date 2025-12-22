@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from database import get_all_media, get_subtitles, clear_db
-from logic import run_library_scan, run_single_refresh
+from logic import run_library_scan, run_single_refresh, run_auto_fix
 
 # 設定路徑
 DATA_DIR = '/app/data'
@@ -39,47 +39,18 @@ st.markdown("""
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
 
     /* Log 終端機 */
-    .log-terminal { 
-        font-family: 'SF Mono', 'Menlo', monospace; 
-        font-size: 11px; 
-        background-color: #0d1117; 
-        color: #c9d1d9; 
-        padding: 10px; 
-        border-radius: 8px; 
-        height: 200px; 
-        border: 1px solid #30363d; 
-        display: flex; 
-        flex-direction: column-reverse; 
-        overflow-y: auto; 
-    }
+    .log-terminal { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11px; background-color: #0d1117; color: #c9d1d9; padding: 10px; border-radius: 8px; height: 200px; border: 1px solid #30363d; display: flex; flex-direction: column-reverse; overflow-y: auto; }
     .log-line { padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; flex-shrink: 0; }
 
-    /* 集數列表 (List View) */
-    .ep-list-row {
-        display: flex;
-        align-items: flex-start;
-        background: rgba(255,255,255,0.03);
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-        padding: 12px 12px;
-        font-size: 0.9em;
-    }
+    /* 集數列表 */
+    .ep-list-row { display: flex; align-items: flex-start; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.05); padding: 12px 12px; font-size: 0.9em; }
     .ep-list-row:last-child { border-bottom: none; }
-    
     .ep-status-icon { margin-right: 15px; font-size: 1.2em; min-width: 25px; margin-top: 2px; }
-    
     .ep-content { display: flex; flex-direction: column; flex-grow: 1; overflow: hidden; }
-    
     .ep-name { font-weight: 600; color: #fff; margin-bottom: 6px; word-break: break-all; }
-    
-    .ep-detail { 
-        font-family: 'SF Mono', 'Consolas', monospace; 
-        color: #aaa; font-size: 0.85em; white-space: pre-wrap; line-height: 1.4;
-        background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px;
-    }
-    
+    .ep-detail { font-family: 'SF Mono', 'Consolas', monospace; color: #aaa; font-size: 0.85em; white-space: pre-wrap; line-height: 1.4; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px; }
     .status-ok { color: #30d158; }
     .status-missing { color: #ff453a; }
-
     [data-testid="stStatusWidget"] { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -90,51 +61,52 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
-        except:
-            pass
+        except: pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
 
 def manage_log_file(read_lines=100):
-    if not os.path.exists(LOG_FILE):
-        return '<div class="log-line">No logs...</div>'
+    if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
     try:
-        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-        
-        # 自動清理舊日誌
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
         if len(lines) > 200:
             lines = lines[-200:]
-            try:
-                with open(LOG_FILE, "w", encoding='utf-8') as f:
-                    f.writelines(lines)
-            except:
-                pass # 忽略寫入衝突
-        
+            try: with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
+            except: pass
         display_lines = lines[-read_lines:]
         display_lines.reverse()
-        
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
-    except:
-        return "Log Error"
+    except: return "Log Error"
 
-# --- 核心邏輯 ---
 def check_complete_status(all_subs_row):
     if not all_subs_row: return False
     return "missing" not in all_subs_row
 
-# --- 詳細頁面 ---
 @st.dialog("媒體詳情 (Episodes)", width="large")
 def show_details(item_name, media_id):
     st.subheader(f"{item_name}")
+    
+    # 🔥 功能按鈕區
+    c_btn1, c_btn2 = st.columns([1, 2])
+    
+    # 讀取設定以供修復功能使用
+    conf = load_config()
+    
+    if c_btn1.button("🛠️ 一鍵修復字幕檔名", use_container_width=True):
+        if not conf.get('url'): st.error("設定錯誤")
+        else:
+            with st.spinner("正在分析並修復..."):
+                msg = run_auto_fix(conf['url'], conf['token'], media_id)
+                st.success(msg)
+                time.sleep(1)
+                st.rerun()
+
     st.markdown("---")
     
     subs = get_subtitles(media_id)
-    
     if not subs:
         st.warning("尚無分析資料")
         return
@@ -156,17 +128,14 @@ def show_details(item_name, media_id):
                 label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
             else:
                 label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
-                
         except:
             label = f"📁 {season_name} (資料格式錯誤)"
 
-        # 預設展開有缺集的季
         is_expanded = (missing > 0)
         
         with st.expander(label, expanded=is_expanded):
             try:
                 st.markdown('<div style="border: 1px solid #333; border-radius: 8px; overflow: hidden;">', unsafe_allow_html=True)
-                
                 for ep in episodes:
                     is_ok = ep['status'] == 'ok'
                     icon = "✅" if is_ok else "❌"
@@ -185,9 +154,7 @@ def show_details(item_name, media_id):
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
-                
                 st.markdown('</div>', unsafe_allow_html=True)
-
             except Exception as e:
                 st.error(f"資料解析錯誤: {e}")
 

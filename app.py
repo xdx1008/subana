@@ -38,7 +38,7 @@ st.markdown("""
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
-    /* 中文字幕標籤 */
+    /* 字幕標籤 */
     .chi-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; min-width: 60px; text-align: center; }
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
@@ -54,15 +54,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 輔助函式 ---
-
-# 🔥 修復點：正確的縮排語法
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
-        except:
-            pass
+        except: pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
@@ -85,10 +82,22 @@ def manage_log_file(max_lines=100):
         return "".join(formatted_html) if formatted_html else '<div class="log-line" style="color: #888;">Log 已清空</div>'
     except Exception as e: return f'<div class="log-line" style="color: red;">讀取日誌失敗: {str(e)}</div>'
 
-def has_chinese_subs(sub_text):
+# 🔥 修改後的判斷邏輯
+def has_valid_subs(sub_text):
     if not sub_text: return False
+    
+    # 1. 檢查是否有外部字幕 (Logic.py 會標記 [外部])
+    # 只要有外部字幕檔，不管檔名有沒有 chi，都算通過
+    if "[外部]" in sub_text:
+        return True
+
+    # 2. 檢查內嵌字幕是否有中文關鍵字
     text = sub_text.lower()
-    keywords = ['chi', 'zho', 'chinese', 'cht', 'chs', '繁體', '简体', 'mandarin']
+    keywords = [
+        'chi', 'zho', 'chinese', 'cht', 'chs', 
+        '繁體', '简体', 'mandarin',
+        'zh-tw', 'zh-cn', 'zh-hk', 'zh-sg'
+    ]
     return any(k in text for k in keywords)
 
 @st.dialog("媒體詳情")
@@ -173,66 +182,67 @@ log_section()
 
 st.subheader("📚 媒體庫 (Library)")
 
-# 篩選器
-col_type, col_chi, col_search = st.columns([1.5, 1.5, 4])
-with col_type:
-    filter_type = st.selectbox("類型", ["All", "Movie", "TV"], label_visibility="collapsed")
-with col_chi:
-    filter_subs = st.selectbox("字幕狀態", ["全部顯示", "有中文字幕 (✅)", "無中文字幕 (❌)"], label_visibility="collapsed")
+col_filter, col_search = st.columns([1.5, 5])
+with col_filter:
+    filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
 with col_search:
     search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字並按 Enter 搜尋...", label_visibility="collapsed")
 
 @st.fragment(run_every=3)
-def render_library_list(f_type, s_query, f_subs):
+def render_library_list(f_type, s_query):
+    # 這裡預設將 filter_subs 設為下拉選單，讓使用者可以選擇
+    # 使用 session state 或 key 來保持狀態
+    f_subs = st.session_state.get("filter_subs_state", "全部顯示")
+
     rows = get_all_media(f_type, s_query)
 
     if not rows:
         st.info("👋 資料庫目前是空的，請在左側點擊 **「🚀 開始全域掃描」**。")
         return
 
-    # Python 端進行字幕篩選
+    # 字幕過濾下拉選單 (放在這裡會隨著 Fragment 刷新，但我們用 session state 保持值)
+    col_sub_filter = st.columns([1, 4])[0]
+    with col_sub_filter:
+        f_subs = st.selectbox(
+            "字幕狀態", 
+            ["全部顯示", "有中文字幕 (✅)", "無中文字幕 (❌)"], 
+            label_visibility="collapsed",
+            key="filter_subs_state"
+        )
+
+    # Python 端進行篩選
     filtered_rows = []
     for row in rows:
-        has_chi = has_chinese_subs(row['all_subs'])
-        if f_subs == "有中文字幕 (✅)" and not has_chi: continue
-        if f_subs == "無中文字幕 (❌)" and has_chi: continue
+        is_valid = has_valid_subs(row['all_subs'])
+        
+        if f_subs == "有中文字幕 (✅)" and not is_valid: continue
+        if f_subs == "無中文字幕 (❌)" and is_valid: continue
+        
         filtered_rows.append(row)
 
     st.caption(f"共 {len(filtered_rows)} 個項目")
     
     for row in filtered_rows:
-        has_chi = has_chinese_subs(row['all_subs'])
+        is_valid = has_valid_subs(row['all_subs'])
         
         with st.container(border=True):
-            # 比例配置
-            c1, c2, c3, c4, c5, c6 = st.columns([1, 0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
+            c1, c2, c3, c4, c5 = st.columns([1.2, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
-            # 1. 類型
             if row['type'] == 'movie':
                 c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else:
                 c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            # 2. 字幕標籤
-            if has_chi:
-                c2.markdown('<div class="chi-badge chi-ok">✓ CHI</div>', unsafe_allow_html=True)
+            # 🔥 標籤邏輯更新
+            if is_valid:
+                c2.markdown('<div class="chi-badge chi-ok">✓ SUBS</div>', unsafe_allow_html=True)
             else:
                 c2.markdown('<div class="chi-badge chi-no">✕ NONE</div>', unsafe_allow_html=True)
             
-            # 3. 名稱
             c3.markdown(f"**{row['name']}**")
-            
-            # 4. 來源
             c4.caption(f"Drive {row['drive_id']}")
             
-            # 5. 更新按鈕
-            if c5.button("更新", key=f"upd_{row['id']}", use_container_width=True):
-                st.toast(f"正在更新: {row['name']}...", icon="🔄")
-                threading.Thread(target=run_single_refresh, 
-                                 args=(config['url'], config['token'], row['id'])).start()
-            
-            # 6. 詳細按鈕
-            if c6.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
+            if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 
-render_library_list(filter_type, search_query, filter_subs)
+render_library_list(filter_type, search_query)

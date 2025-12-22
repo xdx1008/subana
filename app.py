@@ -87,26 +87,40 @@ st.markdown("""
 # --- Config & Log ---
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        try: return json.load(open(CONFIG_FILE, 'r'))
-        except: pass
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
-    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
 
 def manage_log_file(read_lines=100):
-    if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
+    if not os.path.exists(LOG_FILE):
+        return '<div class="log-line">No logs...</div>'
     try:
-        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+        
+        # 自動清理舊日誌
         if len(lines) > 200:
             lines = lines[-200:]
-            try: with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
-            except: pass
+            try:
+                with open(LOG_FILE, "w", encoding='utf-8') as f:
+                    f.writelines(lines)
+            except:
+                pass # 忽略寫入衝突
+        
         display_lines = lines[-read_lines:]
         display_lines.reverse()
+        
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
-    except: return "Log Error"
+    except:
+        return "Log Error"
 
 # --- 核心邏輯 ---
 def check_complete_status(all_subs_row):
@@ -125,22 +139,19 @@ def show_details(item_name, media_id):
         st.warning("尚無分析資料")
         return
 
-    # 🔥 遍歷每一季
     for s in subs:
         season_name = s['season']
         json_data = s['subtitle_tracks']
         episodes = []
         total = 0
         missing = 0
-        label = f"📁 {season_name}" # 預設標題
+        label = f"📁 {season_name}"
 
-        # 1. 預先解析 JSON 以計算狀態
         try:
             episodes = json.loads(json_data)
             total = len(episodes)
             missing = len([e for e in episodes if e['status'] != 'ok'])
             
-            # 🔥 2. 動態產生 Expander 標題
             if missing == 0:
                 label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
             else:
@@ -149,13 +160,11 @@ def show_details(item_name, media_id):
         except:
             label = f"📁 {season_name} (資料格式錯誤)"
 
-        # 3. 渲染 Expander
-        # 如果有缺集，預設展開 (expanded=True)，方便查看
+        # 預設展開有缺集的季
         is_expanded = (missing > 0)
         
         with st.expander(label, expanded=is_expanded):
             try:
-                # 渲染列表
                 st.markdown('<div style="border: 1px solid #333; border-radius: 8px; overflow: hidden;">', unsafe_allow_html=True)
                 
                 for ep in episodes:

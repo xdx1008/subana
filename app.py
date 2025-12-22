@@ -73,7 +73,6 @@ def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
 
-# 🔥 重點修復：展開 try...except
 def manage_log_file(read_lines=100):
     if not os.path.exists(LOG_FILE):
         return '<div class="log-line">No logs...</div>'
@@ -111,9 +110,9 @@ def file_browser_dialog(media_id, media_name):
         st.error("請先設定連線")
         return
 
-    # 初始化路徑
+    # 初始化路徑：如果 session 中沒有，給一個預設值，但實際上我們會從外部按鈕傳入
     if "fb_path" not in st.session_state:
-        st.session_state.fb_path = "/Cloud" # 預設根目錄
+        st.session_state.fb_path = "/Cloud"
 
     client = AlistClient(config['url'], config['token'])
     
@@ -121,10 +120,13 @@ def file_browser_dialog(media_id, media_name):
     c_path, c_up = st.columns([5, 1])
     c_path.text_input("目前路徑", value=st.session_state.fb_path, disabled=True)
     
-    if c_up.button("⬆️ 上一層"):
+    # 判斷是否為根目錄，如果是則禁用上一層
+    is_root = (st.session_state.fb_path == "/" or st.session_state.fb_path == "")
+    
+    if c_up.button("⬆️ 上一層", disabled=is_root):
+        # 自由導航：不設限，直接取 dirname
         parent = posixpath.dirname(st.session_state.fb_path)
-        if parent == "/":
-            parent = "/Cloud"
+        # 修正：posixpath.dirname("/") 回傳 "/"，不會報錯
         st.session_state.fb_path = parent
         st.rerun()
 
@@ -139,14 +141,21 @@ def file_browser_dialog(media_id, media_name):
         # 排序：資料夾在前
         items.sort(key=lambda x: (not x['is_dir'], x['name']))
         
-        # 顯示列表 (只顯示資料夾，因為我們要選的是來源目錄)
+        # 顯示列表 (只顯示資料夾，方便導航)
         for item in items:
             col1, col2 = st.columns([0.1, 0.9])
             
             if item['is_dir']:
                 col1.write("📁")
                 if col2.button(item['name'], key=f"dir_{item['name']}"):
-                    st.session_state.fb_path = posixpath.join(st.session_state.fb_path, item['name'])
+                    # 進入子目錄
+                    # 注意：如果目前是 "/"，join 後會變成 "//name"，需要處理
+                    if st.session_state.fb_path == "/":
+                        new_path = "/" + item['name']
+                    else:
+                        new_path = posixpath.join(st.session_state.fb_path, item['name'])
+                    
+                    st.session_state.fb_path = new_path
                     st.rerun()
             else:
                 pass 
@@ -156,6 +165,7 @@ def file_browser_dialog(media_id, media_name):
     
     if st.button("✅ 確認匯入此目錄字幕", type="primary", use_container_width=True):
         st.toast("正在匯入並修復...", icon="⏳")
+        # 執行匯入邏輯
         msg = import_subs_from_folder(config['url'], config['token'], media_id, st.session_state.fb_path)
         st.success(msg)
         time.sleep(2)
@@ -266,7 +276,6 @@ def render_list(v_filter, s_query):
 
     for row, is_complete in final_rows:
         with st.container(border=True):
-            # 7 欄佈局
             c1, c2, c3, c4, c5, c6, c7 = st.columns([0.8, 0.8, 3, 0.8, 0.8, 0.8, 0.8], vertical_alignment="center")
             
             if row['type'] == 'movie': c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
@@ -278,8 +287,9 @@ def render_list(v_filter, s_query):
             c3.markdown(f"**{row['name']}**")
             c4.caption(f"Drive {row['drive_id']}")
             
-            # 匯入按鈕：打開 Dialog
+            # 🔥 修改點：點擊按鈕時，將當前媒體的 full_path 設為瀏覽器的初始路徑
             if c5.button("📂 匯入", key=f"imp_{row['id']}", help="從其他目錄匯入並修復字幕", use_container_width=True):
+                st.session_state.fb_path = row['full_path']
                 file_browser_dialog(row['id'], row['name'])
             
             if c6.button("更新", key=f"u_{row['id']}", use_container_width=True):

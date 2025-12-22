@@ -14,20 +14,13 @@ LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 # 頁面設定
 st.set_page_config(page_title="Subana", page_icon="🎬", layout="wide")
 
-# --- CSS 優化 (iOS Glass Style) ---
+# --- CSS 優化 ---
 st.markdown("""
 <style>
-    /* === 1. 版面調整 === */
-    .block-container { 
-        padding-top: 4.5rem !important;
-        padding-bottom: 5rem;
-    }
-
-    /* === 2. 全域樣式 === */
+    .block-container { padding-top: 4.5rem !important; padding-bottom: 5rem; }
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
-    /* 狀態卡片 */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -35,52 +28,27 @@ st.markdown("""
     .dot-green { background-color: #30d158; box-shadow: 0 0 8px rgba(48, 209, 88, 0.4); }
     .dot-red { background-color: #ff453a; box-shadow: 0 0 8px rgba(255, 69, 58, 0.4); }
 
-    /* 按鈕 */
     .stButton button { border-radius: 8px !important; font-weight: 500; border: none; transition: transform 0.1s; }
     .stButton button:active { transform: scale(0.98); }
 
-    /* 容器與卡片 */
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
-    /* 標籤 (Badge) */
-    .type-badge { 
-        padding: 4px 10px; 
-        border-radius: 6px; 
-        font-size: 0.7rem; 
-        font-weight: 600; 
-        display: inline-block; 
-        min-width: 50px;
-        width: auto;
-        text-align: center; 
-        letter-spacing: 0.5px;
-        white-space: nowrap; 
-    }
+    /* 類型標籤 */
+    .type-badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; display: inline-block; min-width: 50px; width: auto; text-align: center; letter-spacing: 0.5px; white-space: nowrap; }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
-    /* Log 終端機樣式 */
-    .log-terminal { 
-        font-family: 'SF Mono', 'Menlo', monospace; 
-        font-size: 11px; 
-        line-height: 1.5; 
-        background-color: #0d1117; 
-        color: #c9d1d9; 
-        padding: 15px; 
-        border-radius: 8px; 
-        height: 200px; 
-        overflow-y: auto; 
-        border: 1px solid #30363d; 
-        display: flex; 
-        flex-direction: column; 
-        margin-top: 5px;
-    }
+    /* 🔥 中文字幕標籤 (Check/Cross) */
+    .chi-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; min-width: 60px; text-align: center; }
+    .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
+    .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
+
+    .log-terminal { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11px; line-height: 1.5; background-color: #0d1117; color: #c9d1d9; padding: 15px; border-radius: 8px; height: 200px; overflow-y: auto; border: 1px solid #30363d; display: flex; flex-direction: column; margin-top: 5px; }
     .log-line { padding: 4px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; line-height: 1.4; }
     .log-line:last-child { border-bottom: none; }
     .log-line:nth-child(even) { background-color: rgba(255,255,255,0.02); }
 
     .detail-text { font-family: monospace; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.85em; color: #eee; white-space: pre-wrap; line-height: 1.8; }
-    
-    /* 隱藏原生 Spinner */
     [data-testid="stStatusWidget"] { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -88,8 +56,7 @@ st.markdown("""
 # --- 輔助函式 ---
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f: return json.load(f)
+        try: with open(CONFIG_FILE, 'r') as f: return json.load(f)
         except: pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
@@ -113,6 +80,14 @@ def manage_log_file(max_lines=100):
         return "".join(formatted_html) if formatted_html else '<div class="log-line" style="color: #888;">Log 已清空</div>'
     except Exception as e: return f'<div class="log-line" style="color: red;">讀取日誌失敗: {str(e)}</div>'
 
+# 🔥 檢查是否有中文字幕的邏輯
+def has_chinese_subs(sub_text):
+    if not sub_text: return False
+    text = sub_text.lower()
+    # 關鍵字清單：根據 ffprobe 常見輸出擴充
+    keywords = ['chi', 'zho', 'chinese', 'cht', 'chs', '繁體', '简体', 'mandarin']
+    return any(k in text for k in keywords)
+
 @st.dialog("媒體詳情")
 def show_details(item_name, media_id):
     st.subheader(f"{item_name}")
@@ -125,14 +100,14 @@ def show_details(item_name, media_id):
                 st.markdown(f"<div class='detail-text'>{s['subtitle_tracks']}</div>", unsafe_allow_html=True)
 
 # ==========================================
-# 側邊欄 (Sidebar)
+# 側邊欄
 # ==========================================
 config = load_config()
 
 with st.sidebar:
     st.title("🎬 Subana")
     st.markdown("---")
-
+    
     is_connected = bool(config.get('url') and config.get('token'))
     
     st.markdown(f"""
@@ -195,29 +170,44 @@ log_section()
 
 st.subheader("📚 媒體庫 (Library)")
 
-col_filter, col_search = st.columns([1.5, 5])
-with col_filter:
-    filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
-
+# 篩選器
+col_type, col_chi, col_search = st.columns([1.5, 1.5, 4])
+with col_type:
+    filter_type = st.selectbox("類型", ["All", "Movie", "TV"], label_visibility="collapsed")
+with col_chi:
+    # 🔥 新增字幕篩選器
+    filter_subs = st.selectbox("字幕狀態", ["全部顯示", "有中文字幕 (✅)", "無中文字幕 (❌)"], label_visibility="collapsed")
 with col_search:
-    # 回歸原生: 使用 st.text_input
-    # 使用者需要按 Enter 才會觸發變數更新，這是最穩定的方式
     search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字並按 Enter 搜尋...", label_visibility="collapsed")
 
 @st.fragment(run_every=3)
-def render_library_list(f_type, s_query):
+def render_library_list(f_type, s_query, f_subs):
     rows = get_all_media(f_type, s_query)
 
     if not rows:
         st.info("👋 資料庫目前是空的，請在左側點擊 **「🚀 開始全域掃描」**。")
         return
 
-    st.caption(f"共 {len(rows)} 個項目")
-    
+    # --- Python 端進行字幕篩選 ---
+    filtered_rows = []
     for row in rows:
+        has_chi = has_chinese_subs(row['all_subs'])
+        
+        if f_subs == "有中文字幕 (✅)" and not has_chi:
+            continue
+        if f_subs == "無中文字幕 (❌)" and has_chi:
+            continue
+        
+        filtered_rows.append(row)
+
+    st.caption(f"共 {len(filtered_rows)} 個項目")
+    
+    for row in filtered_rows:
+        has_chi = has_chinese_subs(row['all_subs'])
+        
         with st.container(border=True):
-            # 比例配置
-            c1, c2, c3, c4, c5 = st.columns([1.2, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
+            # 調整比例 [1, 0.8, 3.5, ...] 
+            c1, c2, c3, c4, c5, c6 = st.columns([1, 0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
             # 1. 類型
             if row['type'] == 'movie':
@@ -225,20 +215,26 @@ def render_library_list(f_type, s_query):
             else:
                 c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            # 2. 名稱
-            c2.markdown(f"**{row['name']}**")
+            # 2. 🔥 字幕標籤
+            if has_chi:
+                c2.markdown('<div class="chi-badge chi-ok">✓ CHI</div>', unsafe_allow_html=True)
+            else:
+                c2.markdown('<div class="chi-badge chi-no">✕ NONE</div>', unsafe_allow_html=True)
             
-            # 3. 來源
-            c3.caption(f"Drive {row['drive_id']}")
+            # 3. 名稱
+            c3.markdown(f"**{row['name']}**")
             
-            # 4. 更新按鈕
-            if c4.button("更新", key=f"upd_{row['id']}", use_container_width=True):
+            # 4. 來源
+            c4.caption(f"Drive {row['drive_id']}")
+            
+            # 5. 更新按鈕
+            if c5.button("更新", key=f"upd_{row['id']}", use_container_width=True):
                 st.toast(f"正在更新: {row['name']}...", icon="🔄")
                 threading.Thread(target=run_single_refresh, 
                                  args=(config['url'], config['token'], row['id'])).start()
             
-            # 5. 詳細按鈕
-            if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
+            # 6. 詳細按鈕
+            if c6.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 
-render_library_list(filter_type, search_query)
+render_library_list(filter_type, search_query, filter_subs)

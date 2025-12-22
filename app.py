@@ -62,27 +62,40 @@ st.markdown("""
 # --- Config & Log ---
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        try: return json.load(open(CONFIG_FILE, 'r'))
-        except: pass
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
-    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
 
+# 🔥 重點修復：展開 try...except
 def manage_log_file(read_lines=100):
-    if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
+    if not os.path.exists(LOG_FILE):
+        return '<div class="log-line">No logs...</div>'
     try:
-        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+        
         if len(lines) > 200:
             lines = lines[-200:]
-            try: 
-            with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
-            except: pass
+            try:
+                with open(LOG_FILE, "w", encoding='utf-8') as f:
+                    f.writelines(lines)
+            except:
+                pass
+        
         display_lines = lines[-read_lines:]
         display_lines.reverse()
+        
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
-    except: return "Log Error"
+    except Exception as e:
+        return f'<div class="log-line">Log Error: {e}</div>'
 
 def check_complete_status(all_subs_row):
     if not all_subs_row: return False
@@ -110,7 +123,8 @@ def file_browser_dialog(media_id, media_name):
     
     if c_up.button("⬆️ 上一層"):
         parent = posixpath.dirname(st.session_state.fb_path)
-        if parent == "/": parent = "/Cloud" # 簡單防呆
+        if parent == "/":
+            parent = "/Cloud"
         st.session_state.fb_path = parent
         st.rerun()
 
@@ -135,7 +149,7 @@ def file_browser_dialog(media_id, media_name):
                     st.session_state.fb_path = posixpath.join(st.session_state.fb_path, item['name'])
                     st.rerun()
             else:
-                pass # 這裡不顯示檔案，只讓用戶選目錄進入，最後選定「目前目錄」
+                pass 
 
     st.markdown("---")
     st.markdown(f"**將從 ` {st.session_state.fb_path} ` 匯入所有字幕檔**")
@@ -169,9 +183,12 @@ def show_details(item_name, media_id):
             episodes = json.loads(json_data)
             total = len(episodes)
             missing = len([e for e in episodes if e['status'] != 'ok'])
-            if missing == 0: label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
-            else: label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
-        except: label = f"📁 {season_name} (Error)"
+            if missing == 0:
+                label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
+            else:
+                label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
+        except:
+            label = f"📁 {season_name} (Error)"
 
         with st.expander(label, expanded=(missing > 0)):
             try:
@@ -181,7 +198,8 @@ def show_details(item_name, media_id):
                     icon = "✅" if is_ok else "❌"
                     status_class = "status-ok" if is_ok else "status-missing"
                     detail = ep['detail']
-                    if "Stream #" in detail: detail = "內嵌: " + detail.split("Stream #")[0] + "..."
+                    if "Stream #" in detail:
+                        detail = "內嵌: " + detail.split("Stream #")[0] + "..."
                     
                     st.markdown(f"""
                     <div class="ep-list-row">
@@ -193,7 +211,8 @@ def show_details(item_name, media_id):
                     </div>
                     """, unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-            except: pass
+            except:
+                pass
 
 # --- 主程式 ---
 config = load_config()
@@ -259,7 +278,7 @@ def render_list(v_filter, s_query):
             c3.markdown(f"**{row['name']}**")
             c4.caption(f"Drive {row['drive_id']}")
             
-            # 🔥 匯入按鈕：打開 Dialog
+            # 匯入按鈕：打開 Dialog
             if c5.button("📂 匯入", key=f"imp_{row['id']}", help="從其他目錄匯入並修復字幕", use_container_width=True):
                 file_browser_dialog(row['id'], row['name'])
             

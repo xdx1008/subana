@@ -64,12 +64,18 @@ def analyze_video_subs(file_url):
         return "\n".join(subs)
     except: return "❌ 分析失敗"
 
-# --- 核心處理邏輯 (提取出來共用) ---
+# --- 核心處理邏輯 ---
 
 def process_movie_item(client, drive_id, m_name, m_full_path):
     """處理單一電影資料夾"""
     logging.info(f"   🎥 分析電影: {m_name}")
     files = client.list_files(m_full_path)
+    
+    # 防呆：如果電影資料夾裡面是空的
+    if not files:
+        logging.warning(f"      ⚠️ 資料夾為空: {m_name}")
+        return False
+
     video = next((f for f in files if f['name'].lower().endswith(VIDEO_EXTS)), None)
     
     if video:
@@ -85,6 +91,12 @@ def process_tv_item(client, drive_id, t_name, t_full_path):
     """處理單一劇集資料夾"""
     logging.info(f"   📺 分析劇集: {t_name}")
     seasons = client.list_files(t_full_path)
+    
+    # 防呆：如果劇集資料夾裡面是空的
+    if not seasons:
+        logging.warning(f"      ⚠️ 資料夾為空: {t_name}")
+        return False
+
     season_data = []
     
     for s in seasons:
@@ -95,7 +107,10 @@ def process_tv_item(client, drive_id, t_name, t_full_path):
         s_path = posixpath.join(t_full_path, s_name)
         s_files = client.list_files(s_path)
         
-        # 找第一集影片
+        # 防呆：如果 Season 資料夾裡面是空的
+        if not s_files:
+            continue
+
         video = next((f for f in s_files if f['name'].lower().endswith(VIDEO_EXTS)), None)
         if video:
             logging.info(f"      Analyzing: {s_name}")
@@ -111,14 +126,14 @@ def process_tv_item(client, drive_id, t_name, t_full_path):
 # --- 主任務 ---
 
 def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
-    """全域掃描：會跳過已存在的項目"""
+    """全域掃描"""
     client = AlistClient(alist_url, token)
     logging.info("="*40)
-    logging.info(f"🚀 開始全域掃描 (跳過已存在): {start_cloud_path}")
+    logging.info(f"🚀 開始全域掃描: {start_cloud_path}")
 
     drives = client.list_files(start_cloud_path)
     if not drives:
-        logging.error("❌ 根目錄讀取失敗")
+        logging.error("❌ 根目錄讀取失敗或為空")
         return
 
     drive_list = sorted([d for d in drives if d['is_dir']], key=lambda x: x['name'])
@@ -129,36 +144,55 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
         logging.info(f"👉 Drive: {drive_id}")
 
         sub_folders = client.list_files(drive_full_path)
-        if not sub_folders: continue
+        if not sub_folders:
+            logging.info(f"   ℹ️ Drive {drive_id} 是空的，跳過")
+            continue
+
         folder_map = {item['name'].lower(): item['name'] for item in sub_folders if item['is_dir']}
         
-        # Movies
+        # --- Movies ---
         if 'movies' in folder_map:
-            movies_path = posixpath.join(drive_full_path, folder_map['movies'])
-            for m in client.list_files(movies_path):
-                if not m['is_dir']: continue
-                m_path = posixpath.join(movies_path, m['name'])
-                
-                # 🔥 關鍵修改：檢查是否存在
-                if check_media_exists(m_path):
-                    logging.info(f"   ⏭️ 跳過 (已存在): {m['name']}")
-                    continue
-                
-                process_movie_item(client, drive_id, m['name'], m_path)
+            real_name = folder_map['movies']
+            movies_path = posixpath.join(drive_full_path, real_name)
+            
+            # 🔥 修正點：先檢查 movies 裡面有沒有東西
+            movie_list = client.list_files(movies_path)
+            
+            if not movie_list:
+                logging.info(f"   ℹ️ {real_name} 資料夾是空的，跳過")
+            else:
+                logging.info(f"   🎥 掃描電影目錄 ({len(movie_list)} 項目)")
+                for m in movie_list:
+                    if not m['is_dir']: continue
+                    m_path = posixpath.join(movies_path, m['name'])
+                    
+                    if check_media_exists(m_path):
+                        logging.info(f"   ⏭️ 跳過 (已存在): {m['name']}")
+                        continue
+                    
+                    process_movie_item(client, drive_id, m['name'], m_path)
 
-        # TV
+        # --- TV ---
         if 'tv' in folder_map:
-            tv_path = posixpath.join(drive_full_path, folder_map['tv'])
-            for t in client.list_files(tv_path):
-                if not t['is_dir']: continue
-                t_path = posixpath.join(tv_path, t['name'])
-                
-                # 🔥 關鍵修改：檢查是否存在
-                if check_media_exists(t_path):
-                    logging.info(f"   ⏭️ 跳過 (已存在): {t['name']}")
-                    continue
-                
-                process_tv_item(client, drive_id, t['name'], t_path)
+            real_name = folder_map['tv']
+            tv_path = posixpath.join(drive_full_path, real_name)
+            
+            # 🔥 修正點：先檢查 tv 裡面有沒有東西
+            tv_list = client.list_files(tv_path)
+            
+            if not tv_list:
+                logging.info(f"   ℹ️ {real_name} 資料夾是空的，跳過")
+            else:
+                logging.info(f"   📺 掃描劇集目錄 ({len(tv_list)} 項目)")
+                for t in tv_list:
+                    if not t['is_dir']: continue
+                    t_path = posixpath.join(tv_path, t['name'])
+                    
+                    if check_media_exists(t_path):
+                        logging.info(f"   ⏭️ 跳過 (已存在): {t['name']}")
+                        continue
+                    
+                    process_tv_item(client, drive_id, t['name'], t_path)
 
     logging.info("🏁 掃描結束！")
 
@@ -171,7 +205,7 @@ def run_single_refresh(alist_url, token, media_id):
         logging.error("❌ 找不到該媒體 ID")
         return
 
-    logging.info(f"🔄 [手動刷新] {row['name']} ({row['type']})")
+    logging.info(f"🔄 [手動刷新] {row['name']}")
     
     success = False
     if row['type'] == 'movie':
@@ -182,4 +216,4 @@ def run_single_refresh(alist_url, token, media_id):
     if success:
         logging.info("✅ 刷新完成")
     else:
-        logging.error("❌ 刷新失敗 (可能檔案已移動或 API 錯誤)")
+        logging.error("❌ 刷新失敗")

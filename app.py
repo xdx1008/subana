@@ -6,6 +6,13 @@ import time
 from database import get_all_media, get_subtitles, clear_db
 from logic import run_library_scan, run_single_refresh
 
+# 引入即時輸入監聽套件
+try:
+    from streamlit_keyup import st_keyup
+except ImportError:
+    st.error("請先安裝 streamlit-keyup 套件以啟用即時搜尋功能。")
+    st.stop()
+
 # 設定路徑
 DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
@@ -43,7 +50,18 @@ st.markdown("""
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
     /* 標籤 (Badge) 優化 */
-    .type-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; width: 50px; text-align: center; letter-spacing: 0.5px; }
+    .type-badge { 
+        padding: 4px 10px; 
+        border-radius: 6px; 
+        font-size: 0.7rem; 
+        font-weight: 600; 
+        display: inline-block; 
+        min-width: 50px;
+        width: auto;
+        text-align: center; 
+        letter-spacing: 0.5px;
+        white-space: nowrap; 
+    }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
@@ -67,18 +85,7 @@ st.markdown("""
     .log-line:last-child { border-bottom: none; }
     .log-line:nth-child(even) { background-color: rgba(255,255,255,0.02); }
 
-    /* 字幕詳情文字樣式 */
-    .detail-text { 
-        font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-        background: rgba(0,0,0,0.3); 
-        padding: 15px; 
-        border-radius: 8px; 
-        font-size: 0.9em; 
-        color: #e0e0e0; 
-        border: 1px solid rgba(255,255,255,0.1);
-        white-space: pre-wrap; 
-        line-height: 1.8; 
-    }
+    .detail-text { font-family: monospace; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.85em; color: #eee; white-space: pre-wrap; line-height: 1.8; }
     
     /* 隱藏原生 Spinner */
     [data-testid="stStatusWidget"] { visibility: hidden; }
@@ -198,47 +205,40 @@ st.subheader("📚 媒體庫 (Library)")
 col_filter, col_search = st.columns([1.5, 5])
 with col_filter:
     filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
-with col_search:
-    # 這裡移除了按鈕，單純依靠 Streamlit 的輸入更新機制
-    # 當使用者輸入文字並按 Enter (或點擊空白處) 時，變數會更新，觸發下方 Fragment 刷新
-    search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字搜尋...", label_visibility="collapsed")
 
-@st.fragment(run_every=2)
+with col_search:
+    # 使用 st_keyup 實現即時過濾
+    search_query = st_keyup("搜尋媒體...", placeholder="輸入關鍵字搜尋 (即時過濾)...", label_visibility="collapsed")
+
+@st.fragment(run_every=3)
 def render_library_list(f_type, s_query):
-    # 根據傳入的篩選條件即時查詢
     rows = get_all_media(f_type, s_query)
 
     if not rows:
         st.info("👋 資料庫目前是空的，請在左側點擊 **「🚀 開始全域掃描」**。")
         return
 
-    st.caption(f"共 {len(rows)} 個項目 (Auto Refreshing...)")
+    st.caption(f"共 {len(rows)} 個項目")
     
     for row in rows:
         with st.container(border=True):
-            c1, c2, c3, c4, c5 = st.columns([0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
+            # 調整比例給 Badge 更多空間 (1.2)
+            c1, c2, c3, c4, c5 = st.columns([1.2, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
-            # 1. 類型 (已修改為 TV)
             if row['type'] == 'movie':
                 c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else:
                 c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            # 2. 名稱
             c2.markdown(f"**{row['name']}**")
-            
-            # 3. 來源
             c3.caption(f"Drive {row['drive_id']}")
             
-            # 4. 更新按鈕
             if c4.button("更新", key=f"upd_{row['id']}", use_container_width=True):
                 st.toast(f"正在更新: {row['name']}...", icon="🔄")
                 threading.Thread(target=run_single_refresh, 
                                  args=(config['url'], config['token'], row['id'])).start()
             
-            # 5. 詳細按鈕
             if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 
-# 傳入篩選參數，實現隨打隨過濾
 render_library_list(filter_type, search_query)

@@ -11,23 +11,23 @@ DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 
-# 頁面設定 (使用通用電影圖示)
+# 頁面設定
 st.set_page_config(page_title="Subana", page_icon="🎬", layout="wide")
 
-# --- iOS 現代極簡風格 CSS ---
+# --- CSS 優化 (修復 Log 顯示與遮擋) ---
 st.markdown("""
 <style>
-    /* 全域字體優化 */
+    /* 全域字體 */
     .stApp {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
 
-    /* 側邊欄優化 */
+    /* 側邊欄背景 */
     section[data-testid="stSidebar"] {
-        background-color: #1c1c1e; /* iOS Dark Gray */
+        background-color: #1c1c1e;
     }
     
-    /* 狀態卡片 (Status Card) */
+    /* 狀態卡片 */
     .status-card {
         background-color: rgba(255,255,255,0.05);
         border-radius: 12px;
@@ -41,16 +41,16 @@ st.markdown("""
     .dot-green { background-color: #30d158; box-shadow: 0 0 8px rgba(48, 209, 88, 0.4); }
     .dot-red { background-color: #ff453a; box-shadow: 0 0 8px rgba(255, 69, 58, 0.4); }
 
-    /* 按鈕樣式重塑 */
+    /* 按鈕樣式 */
     .stButton button {
-        border-radius: 10px !important;
+        border-radius: 8px !important;
         font-weight: 500;
         border: none;
         transition: transform 0.1s;
     }
     .stButton button:active { transform: scale(0.98); }
 
-    /* 列表卡片 */
+    /* 列表卡片容器 */
     div[data-testid="stContainer"] {
         background-color: rgba(255,255,255,0.03);
         border-radius: 12px;
@@ -61,30 +61,45 @@ st.markdown("""
     .type-badge {
         padding: 4px 8px;
         border-radius: 6px;
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         font-weight: bold;
         display: inline-block;
         width: 60px;
         text-align: center;
+        letter-spacing: 0.5px;
     }
-    .tb-movie { background-color: rgba(10, 132, 255, 0.2); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
-    .tb-tv { background-color: rgba(48, 209, 88, 0.2); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
+    .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
+    .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
-    /* Log 樣式 */
+    /* === Log 樣式 (重點修復) === */
     .log-terminal {
         font-family: 'SF Mono', 'Menlo', monospace;
         font-size: 11px;
-        line-height: 1.5;
-        background-color: #0d1117;
+        background-color: #0d1117; /* GitHub Dark Dimmed */
         color: #c9d1d9;
-        padding: 15px;
+        padding: 0; /* 內距由單行控制 */
         border-radius: 8px;
-        height: 200px;
-        overflow-y: auto;
+        height: 250px; /* 固定高度 */
+        overflow-y: auto; /* 允許捲動 */
         border: 1px solid #30363d;
+        display: flex;
+        flex-direction: column-reverse; /* 讓最新的在最上面 (或保持正常流向，視需求) - 這裡保持正常，JS控制捲動 */
+        flex-direction: column;
     }
     
-    /* 移除頂部空白 */
+    /* Log 單行樣式 */
+    .log-line {
+        padding: 4px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.03);
+        word-wrap: break-word;
+        white-space: pre-wrap; /* 確保換行 */
+        line-height: 1.4;
+    }
+    .log-line:last-child { border-bottom: none; }
+    /* 偶數行稍微變色，增加閱讀性 */
+    .log-line:nth-child(even) { background-color: rgba(255,255,255,0.02); }
+
+    /* 移除頂部過多空白 */
     .block-container { padding-top: 2rem; }
     
     /* 詳情頁文字 */
@@ -110,13 +125,46 @@ def load_config():
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
 
-def tail_log(lines=30):
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
-                return "".join(f.readlines()[-lines:])
-        except: return "無法讀取日誌..."
-    return "系統待機中..."
+def manage_log_file(max_lines=100):
+    """
+    讀取 Log 並執行自動清理：
+    1. 讀取所有內容
+    2. 如果超過 max_lines，則截斷檔案保留最後 max_lines
+    3. 回傳 HTML 格式的 Log 字串
+    """
+    if not os.path.exists(LOG_FILE):
+        return '<div class="log-line" style="color: #888;">系統待機中... (No logs)</div>'
+
+    try:
+        # 讀取檔案
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+        
+        # 自動清理機制：如果超過 100 行，重寫檔案
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:] # 只保留最後 N 行
+            try:
+                with open(LOG_FILE, "w", encoding='utf-8') as f:
+                    f.writelines(lines)
+            except: pass # 避免寫入衝突導致報錯，稍微略過沒關係
+
+        # 格式化輸出 HTML
+        formatted_html = []
+        for line in lines:
+            safe_line = line.strip().replace("<", "&lt;").replace(">", "&gt;")
+            if safe_line:
+                formatted_html.append(f'<div class="log-line">{safe_line}</div>')
+        
+        # 如果是空的
+        if not formatted_html:
+            return '<div class="log-line" style="color: #888;">Log 已清空</div>'
+
+        # 反轉順序讓最新的在最上面 (可選，這裡保持時間順序)
+        # return "".join(reversed(formatted_html)) 
+        return "".join(formatted_html)
+
+    except Exception as e:
+        return f'<div class="log-line" style="color: red;">讀取日誌失敗: {str(e)}</div>'
 
 @st.dialog("媒體詳情")
 def show_details(item_name, media_id):
@@ -139,8 +187,7 @@ with st.sidebar:
     st.title("🎬 Subana")
     st.markdown("---")
 
-    # 1. 狀態儀表板 (永遠顯示)
-    # 即使下方的設定收起來，這裡也能看到連線狀態
+    # 1. 狀態儀表板
     is_connected = bool(config.get('url') and config.get('token'))
     
     status_html = f"""
@@ -148,7 +195,7 @@ with st.sidebar:
         <div style="margin-bottom: 8px;">
             <span class="status-dot {'dot-green' if is_connected else 'dot-red'}"></span>
             <span style="color: {'#30d158' if is_connected else '#ff453a'}; font-weight: bold;">
-                {'已連線 (Online)' if is_connected else '未設定 (Offline)'}
+                {'Online' if is_connected else 'Offline'}
             </span>
         </div>
         <div class="status-label">TARGET URL</div>
@@ -159,8 +206,8 @@ with st.sidebar:
     """
     st.markdown(status_html, unsafe_allow_html=True)
 
-    # 2. 設定表單 (可收合)
-    with st.expander("⚙️ 修改連線設定"):
+    # 2. 設定表單
+    with st.expander("⚙️ 連線設定"):
         with st.form("sidebar_config"):
             new_url = st.text_input("Alist URL", value=config.get("url", ""))
             new_token = st.text_input("Token", value=config.get("token", ""), type="password")
@@ -185,6 +232,7 @@ with st.sidebar:
             st.error("請先完成連線設定")
         else:
             st.toast("正在背景掃描...", icon="⏳")
+            # 掃描前先清空 log 檔，讓使用者看到新的開始
             open(LOG_FILE, 'w').close()
             threading.Thread(target=run_library_scan, 
                              args=(config['url'], config['token'], config['path'])).start()
@@ -199,17 +247,17 @@ with st.sidebar:
 # 主畫面 - 內容展示
 # ==========================================
 
-# Log 區塊 (預設收合，不佔空間)
+# 🔥 Log 區塊 (置頂 + 自動清理)
+# 使用 st.fragment 進行局部刷新，不會影響下方列表
 @st.fragment(run_every=1)
 def log_section():
-    with st.expander("💻 系統終端機 (System Log)", expanded=False):
-        log_content = tail_log(20)
-        # HTML 渲染終端機風格
-        st.markdown(f'<div class="log-terminal">{log_content}</div>', unsafe_allow_html=True)
+    # 預設展開，方便監控
+    with st.expander("💻 系統終端機 (System Log - Auto Cleaned)", expanded=True):
+        # 呼叫管理函式：讀取 + 自動清理超過 100 行的舊資料
+        log_html = manage_log_file(max_lines=100)
         
-        col_r1, col_r2 = st.columns([8, 1])
-        if col_r2.button("清除", key="cls_btn", help="清除目前的日誌內容"):
-            open(LOG_FILE, 'w').close()
+        # 注入 HTML 渲染
+        st.markdown(f'<div class="log-terminal">{log_html}</div>', unsafe_allow_html=True)
 
 log_section()
 
@@ -240,7 +288,7 @@ else:
             # 欄位比例調整
             c1, c2, c3, c4, c5 = st.columns([0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
-            # 1. 類型標籤 (使用 HTML CSS 渲染)
+            # 1. 類型標籤
             if row['type'] == 'movie':
                 c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else:
@@ -255,9 +303,11 @@ else:
             # 4. 更新按鈕
             if c4.button("更新", key=f"upd_{row['id']}", use_container_width=True):
                 st.toast(f"正在更新: {row['name']}...", icon="🔄")
+                # 更新前清除 Log 讓使用者看到最新進度
+                open(LOG_FILE, 'w').close() 
                 threading.Thread(target=run_single_refresh, 
                                  args=(config['url'], config['token'], row['id'])).start()
             
-            # 5. 詳細按鈕 (Primary Color)
+            # 5. 詳細按鈕
             if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])

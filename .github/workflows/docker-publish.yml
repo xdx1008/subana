@@ -1,10 +1,11 @@
 name: Build and Push Docker Image
 
 on:
-  # 當推送到 main 分支時自動觸發
-  push:
-    branches: [ "main" ]
-  # 允許手動觸發 Workflow
+  # 移除 push 事件，避免自動執行
+  # push:
+  #   branches: [ "main" ]
+  
+  # 只保留手動觸發
   workflow_dispatch:
 
 env:
@@ -18,7 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 設定 Docker Buildx (用於多架構構建，雖然這裡只用預設)
+      # 設定 Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
@@ -29,14 +30,14 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 提取 Metadata (用於 tag 版本控制)
+      # 提取 Metadata
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v4
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
             type=sha,format=short
 
       # 構建並推送映像檔
@@ -47,5 +48,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha # 使用 GitHub Actions 快取加速構建
+          cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -20,7 +20,6 @@ st.markdown("""
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
-    /* 狀態卡片 & 按鈕 */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -30,7 +29,6 @@ st.markdown("""
     .stButton button { border-radius: 8px !important; font-weight: 500; border: none; transition: transform 0.1s; }
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
-    /* 標籤樣式 */
     .type-badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; display: inline-block; min-width: 50px; text-align: center; white-space: nowrap; }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
@@ -38,11 +36,9 @@ st.markdown("""
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
 
-    /* Log 終端機 */
     .log-terminal { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11px; background-color: #0d1117; color: #c9d1d9; padding: 10px; border-radius: 8px; height: 200px; border: 1px solid #30363d; display: flex; flex-direction: column-reverse; overflow-y: auto; }
     .log-line { padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; flex-shrink: 0; }
 
-    /* 集數列表 */
     .ep-list-row { display: flex; align-items: flex-start; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.05); padding: 12px 12px; font-size: 0.9em; }
     .ep-list-row:last-child { border-bottom: none; }
     .ep-status-icon { margin-right: 15px; font-size: 1.2em; min-width: 25px; margin-top: 2px; }
@@ -61,25 +57,38 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
-        except: pass
+        except:
+            pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
-    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
 
 def manage_log_file(read_lines=100):
-    if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
+    if not os.path.exists(LOG_FILE):
+        return '<div class="log-line">No logs...</div>'
     try:
-        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+        
+        # 自動清理舊日誌
         if len(lines) > 200:
             lines = lines[-200:]
-            try: with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
-            except: pass
+            try:
+                # 🔥 這裡必須換行
+                with open(LOG_FILE, "w", encoding='utf-8') as f:
+                    f.writelines(lines)
+            except:
+                pass
+        
         display_lines = lines[-read_lines:]
         display_lines.reverse()
+        
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
-    except: return "Log Error"
+    except Exception as e:
+        return f'<div class="log-line">Log Error: {e}</div>'
 
 def check_complete_status(all_subs_row):
     if not all_subs_row: return False
@@ -89,14 +98,12 @@ def check_complete_status(all_subs_row):
 def show_details(item_name, media_id):
     st.subheader(f"{item_name}")
     
-    # 🔥 功能按鈕區
     c_btn1, c_btn2 = st.columns([1, 2])
-    
-    # 讀取設定以供修復功能使用
     conf = load_config()
     
     if c_btn1.button("🛠️ 一鍵修復字幕檔名", use_container_width=True):
-        if not conf.get('url'): st.error("設定錯誤")
+        if not conf.get('url'):
+            st.error("設定錯誤")
         else:
             with st.spinner("正在分析並修復..."):
                 msg = run_auto_fix(conf['url'], conf['token'], media_id)
@@ -115,9 +122,8 @@ def show_details(item_name, media_id):
         season_name = s['season']
         json_data = s['subtitle_tracks']
         episodes = []
-        total = 0
-        missing = 0
         label = f"📁 {season_name}"
+        missing = 0
 
         try:
             episodes = json.loads(json_data)

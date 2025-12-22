@@ -3,123 +3,131 @@ import json
 import os
 import threading
 import time
-from logic import run_analysis, run_renamer
+from database import get_all_media, get_subtitles, clear_db
+from logic import run_library_scan
 
+# 設定
 DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 
-if not os.path.exists(DATA_DIR): os.makedirs(DATA_DIR)
+st.set_page_config(page_title="Subana 媒體庫", page_icon="🎬", layout="wide")
 
-st.set_page_config(page_title="Subana 工具箱", page_icon="🧰", layout="centered")
+# --- CSS 美化 ---
+st.markdown("""
+<style>
+    .stButton button { width: 100%; }
+    .sub-info { background-color: #262730; padding: 10px; border-radius: 5px; font-family: monospace; white-space: pre-wrap; }
+</style>
+""", unsafe_allow_html=True)
 
+# --- 輔助函式 ---
 def load_config():
-    default_config = {
-        "url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False,
-        "rename_video_dir": "", "rename_sub_dir": ""
-    }
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, 'r') as f:
-                saved = json.load(f)
-                default_config.update(saved) # 合併設定
-                return default_config
+            with open(CONFIG_FILE, 'r') as f: return json.load(f)
         except: pass
-    
-    if not os.path.exists(CONFIG_FILE): save_config(default_config)
-    return default_config
+    return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
 
-def tail_log(lines=30):
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
-                return "".join(f.readlines()[-lines:])
-        except: return "讀取日誌失敗..."
-    return "尚無日誌..."
-
-# --- UI ---
-st.title("🧰 Subana 全能工具箱")
-st.caption("v5.0 Integrated | Analysis + Renamer")
-
-config = load_config()
-
-# 全域設定
-with st.expander("🌍 全域連線設定 (Global Config)", expanded=True):
-    col1, col2 = st.columns([2, 1])
-    g_url = col1.text_input("Alist URL", value=config.get("url"), placeholder="https://alist.example.com")
-    g_token = col2.text_input("Token", value=config.get("token"), type="password")
-
-# 分頁功能
-tab1, tab2, tab3 = st.tabs(["📊 媒體分析", "Rn 字幕對齊", "📜 系統日誌"])
-
-# --- Tab 1: 分析器 ---
-with tab1:
-    st.subheader("內嵌字幕分析 & 報告")
-    ana_path = st.text_input("分析起始目錄", value=config.get("path"))
+# --- 彈出視窗 (Dialog) ---
+@st.dialog("字幕詳細資訊")
+def show_details(item_name, media_id):
+    st.subheader(f"🎬 {item_name}")
+    subs = get_subtitles(media_id)
     
-    c1, c2 = st.columns(2)
-    ana_interval = c1.number_input("自動循環 (秒)", value=config.get("interval"), min_value=60)
-    ana_auto = c2.checkbox("啟用背景自動分析", value=config.get("auto_run"))
+    if not subs:
+        st.warning("尚無分析資料")
+    
+    for s in subs:
+        with st.expander(f"{s['season']}", expanded=True):
+            st.markdown(f"<div class='sub-info'>{s['subtitle_tracks']}</div>", unsafe_allow_html=True)
 
-    if st.button("💾 儲存分析設定"):
-        config.update({"url": g_url.rstrip('/'), "token": g_token, "path": ana_path, "interval": ana_interval, "auto_run": ana_auto})
-        save_config(config)
-        st.success("設定已儲存！")
+# --- 主介面 ---
+st.title("🎬 Subana 媒體庫管理")
+
+tab1, tab2, tab3 = st.tabs(["📚 媒體列表", "⚙️ 設定與掃描", "📜 系統日誌"])
+
+# === Tab 1: 媒體列表 ===
+with tab1:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    filter_type = col1.selectbox("類型篩選", ["All", "Movie", "TV"])
+    search_query = col2.text_input("搜尋名稱", placeholder="輸入關鍵字...")
+    if col3.button("🔄 重新整理列表"):
+        st.rerun()
+
+    # 從 DB 讀取資料
+    rows = get_all_media(filter_type, search_query)
+    
+    # 顯示表頭
+    st.markdown("---")
+    h1, h2, h3, h4 = st.columns([1, 1, 4, 1])
+    h1.markdown("**Drive**")
+    h2.markdown("**Type**")
+    h3.markdown("**Name**")
+    h4.markdown("**Action**")
+    st.markdown("---")
+
+    # 顯示資料列
+    for row in rows:
+        c1, c2, c3, c4 = st.columns([1, 1, 4, 1])
+        c1.text(row['drive_id'])
+        
+        type_badge = "🎬 電影" if row['type'] == 'movie' else "📺 影集"
+        c2.text(type_badge)
+        
+        c3.text(row['name'])
+        
+        if c4.button("ℹ️ 詳細", key=f"btn_{row['id']}"):
+            show_details(row['name'], row['id'])
+
+    if not rows:
+        st.info("資料庫為空，請至「設定與掃描」頁面執行掃描。")
+
+# === Tab 2: 設定與掃描 ===
+with tab2:
+    config = load_config()
+    
+    with st.expander("連線設定", expanded=True):
+        new_url = st.text_input("Alist URL", value=config.get("url", ""))
+        new_token = st.text_input("Token", value=config.get("token", ""), type="password")
+        new_path = st.text_input("根目錄 (通常是 /Cloud)", value=config.get("path", "/Cloud"))
+        
+        if st.button("💾 儲存設定"):
+            config['url'] = new_url.rstrip('/')
+            config['token'] = new_token
+            config['path'] = new_path
+            save_config(config)
+            st.success("已儲存")
 
     st.divider()
-    if st.button("▶️ 立即執行分析"):
-        if not g_url or not g_token: st.error("請填寫 URL 與 Token")
+    st.subheader("資料庫操作")
+    
+    c1, c2 = st.columns(2)
+    if c1.button("🚀 開始全域掃描 (建立資料庫)", type="primary"):
+        if not new_url or not new_token:
+            st.error("請先填寫設定")
         else:
-            st.toast("分析任務已啟動...")
-            threading.Thread(target=run_analysis, args=(g_url, g_token, ana_path)).start()
-
-# --- Tab 2: 對齊器 ---
-with tab2:
-    st.subheader("字幕檔名自動對齊")
-    st.info("將字幕檔名修改為與影片一致 (基於 SxxExx 匹配)")
-    
-    r_vid_dir = st.text_input("影片資料夾", value=config.get("rename_video_dir", ""))
-    r_sub_dir = st.text_input("字幕資料夾", value=config.get("rename_sub_dir", ""))
-    
-    # 同步按鈕
-    if st.checkbox("字幕與影片在同一資料夾"):
-        r_sub_dir = r_vid_dir
-        st.caption(f"目前字幕路徑: {r_sub_dir}")
-
-    col_btn1, col_btn2 = st.columns(2)
-    
-    # 預覽按鈕
-    if col_btn1.button("🔍 掃描預覽 (Dry Run)"):
-        if not g_url or not g_token: st.error("請填寫 URL 與 Token")
-        else:
-            # 暫存路徑設定
-            config.update({"rename_video_dir": r_vid_dir, "rename_sub_dir": r_sub_dir})
-            save_config(config)
+            st.toast("掃描任務已在背景啟動，請稍候...")
+            t = threading.Thread(target=run_library_scan, args=(new_url, new_token, new_path))
+            t.start()
             
-            st.toast("預覽掃描中...")
-            threading.Thread(target=run_renamer, args=(g_url, g_token, r_vid_dir, r_sub_dir, True)).start()
+    if c2.button("🗑️ 清空資料庫 (重置)"):
+        clear_db()
+        st.warning("資料庫已清空")
+        time.sleep(1)
+        st.rerun()
 
-    # 執行按鈕
-    if col_btn2.button("⚡ 確認並改名 (Execute)", type="primary"):
-        if not g_url or not g_token: st.error("請填寫 URL 與 Token")
-        else:
-            st.toast("改名任務執行中...")
-            threading.Thread(target=run_renamer, args=(g_url, g_token, r_vid_dir, r_sub_dir, False)).start()
-
-# --- Tab 3: 日誌 ---
+# === Tab 3: 日誌 ===
 with tab3:
-    c_l1, c_l2 = st.columns([3, 1])
-    auto_scroll = c_l1.toggle("🔴 即時監控 Log", value=True)
-    if c_l2.button("🗑️ 清空"): open(LOG_FILE, 'w').close(); st.rerun()
-
-    log_box = st.empty()
-    
-    if auto_scroll:
-        while True:
-            log_box.code(tail_log(50), language="text")
-            time.sleep(1)
+    if st.button("刷新日誌"):
+        pass
+        
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()[-50:]
+            st.code("".join(lines))
     else:
-        log_box.code(tail_log(50), language="text")
+        st.text("無日誌")

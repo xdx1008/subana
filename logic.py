@@ -9,6 +9,21 @@ import logging
 DATA_DIR = '/app/data'
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 
+class FlushFileHandler(logging.FileHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        # 改用我們自定義的 Handler
+        FlushFileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
 # 確保資料目錄存在 (若不存在則建立)
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)

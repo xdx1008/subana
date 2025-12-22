@@ -4,8 +4,15 @@ import os
 import logging
 from logic import run_analysis
 
-CONFIG_FILE = 'config.json'
-# Worker 自己也需要 Log，這裡簡單設定輸出到 console (Docker logs)
+# --- 修改點：路徑設定 ---
+DATA_DIR = '/app/data'
+CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
+
+# 確保目錄存在
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+# Worker 輸出到 Console (這樣可以在 Docker logs 看到)
 logging.basicConfig(level=logging.INFO, format='[Worker] %(asctime)s - %(message)s')
 
 def load_config():
@@ -29,20 +36,17 @@ while True:
         interval = config.get("interval", 3600)
 
         if url and token and path:
-            logging.info(f"⏰ 自動排程觸發，準備執行任務 (間隔: {interval}秒)")
+            logging.info(f"⏰ 自動執行觸發 (間隔 {interval}s)")
             try:
-                # 呼叫核心邏輯
                 run_analysis(url, token, path)
             except Exception as e:
-                logging.error(f"任務執行發生錯誤: {e}")
+                logging.error(f"執行錯誤: {e}")
             
-            logging.info(f"💤 任務結束，進入休眠 {interval} 秒...")
+            logging.info(f"💤 休眠 {interval} 秒...")
             time.sleep(interval)
         else:
-            logging.warning("⚠️ 自動執行已啟用，但設定檔參數不完整 (URL/Token/Path)，等待修正...")
-            time.sleep(60) # 設定不完整時，每分鐘檢查一次
+            logging.warning("設定不完整，等待修正...")
+            time.sleep(60)
             
     else:
-        # 如果沒開自動執行，就每 30 秒檢查一次設定檔狀態
-        # logging.debug("自動執行未啟用，待機中...") 
         time.sleep(30)

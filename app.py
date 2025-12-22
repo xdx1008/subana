@@ -75,7 +75,8 @@ def manage_log_file(read_lines=100):
         with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
         if len(lines) > 200:
             lines = lines[-200:]
-            try: with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
+            try: 
+            with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
             except: pass
         display_lines = lines[-read_lines:]
         display_lines.reverse()

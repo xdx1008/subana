@@ -15,6 +15,7 @@ COPY --from=ffmpeg_source /ffprobe /usr/local/bin/
 
 # --- 瘦身關鍵 2：只安裝必要的 Python 套件 ---
 COPY requirements.txt .
+RUN echo "Cache bust: v7.5"
 # --no-cache-dir 可以避免 pip 下載的暫存檔佔用空間
 RUN pip install --no-cache-dir -r requirements.txt
 

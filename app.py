@@ -15,15 +15,30 @@ if not os.path.exists(DATA_DIR):
 
 st.set_page_config(page_title="Subana 設定", page_icon="🎬", layout="centered")
 
+# ... (原本的 import)
+
+# --- 輔助函式 ---
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
+
 def load_config():
+    # 預設設定
+    default_config = {
+        "url": "", 
+        "token": "", 
+        "path": "/Cloud", 
+        "interval": 3600, 
+        "auto_run": False
+    }
+
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f: return json.load(f)
         except: pass
-    return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
-
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
+    if not os.path.exists(CONFIG_FILE):
+        save_config(default_config)
+        
+    return default_config
 
 def tail_log(lines=30):
     if os.path.exists(LOG_FILE):

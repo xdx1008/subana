@@ -20,7 +20,7 @@ st.markdown("""
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
-    /* 基本元件樣式 */
+    /* 狀態卡片 & 按鈕 */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -38,7 +38,7 @@ st.markdown("""
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
 
-    /* Log 終端機 (Auto-Scroll) */
+    /* Log 終端機 */
     .log-terminal { 
         font-family: 'SF Mono', 'Menlo', monospace; 
         font-size: 11px; 
@@ -49,21 +49,15 @@ st.markdown("""
         height: 200px; 
         border: 1px solid #30363d; 
         display: flex; 
-        flex-direction: column-reverse; /* 置底關鍵 */
+        flex-direction: column-reverse; 
         overflow-y: auto; 
     }
-    .log-line { 
-        padding: 2px 5px; 
-        border-bottom: 1px solid rgba(255,255,255,0.03); 
-        word-wrap: break-word; 
-        white-space: pre-wrap; 
-        flex-shrink: 0; 
-    }
+    .log-line { padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; flex-shrink: 0; }
 
-    /* 🔥 [重點修改] 集數列表 (List View) - 垂直堆疊佈局 */
+    /* 集數列表 (List View) */
     .ep-list-row {
         display: flex;
-        align-items: flex-start; /* 靠上對齊 */
+        align-items: flex-start;
         background: rgba(255,255,255,0.03);
         border-bottom: 1px solid rgba(255,255,255,0.05);
         padding: 12px 12px;
@@ -71,37 +65,16 @@ st.markdown("""
     }
     .ep-list-row:last-child { border-bottom: none; }
     
-    .ep-status-icon { 
-        margin-right: 15px; 
-        font-size: 1.2em; 
-        min-width: 25px; /* 防止圖示被壓縮 */
-        margin-top: 2px; /* 微調對齊 */
-    }
+    .ep-status-icon { margin-right: 15px; font-size: 1.2em; min-width: 25px; margin-top: 2px; }
     
-    /* 右側內容容器 */
-    .ep-content {
-        display: flex;
-        flex-direction: column; /* 垂直排列 */
-        flex-grow: 1;
-        overflow: hidden; /* 防止撐開 */
-    }
+    .ep-content { display: flex; flex-direction: column; flex-grow: 1; overflow: hidden; }
     
-    .ep-name { 
-        font-weight: 600; 
-        color: #fff; 
-        margin-bottom: 6px; /* 與下方詳情的距離 */
-        word-break: break-all; /* 長檔名自動換行 */
-    }
+    .ep-name { font-weight: 600; color: #fff; margin-bottom: 6px; word-break: break-all; }
     
     .ep-detail { 
         font-family: 'SF Mono', 'Consolas', monospace; 
-        color: #aaa; 
-        font-size: 0.85em; 
-        white-space: pre-wrap; 
-        line-height: 1.4;
-        background: rgba(0,0,0,0.2);
-        padding: 6px;
-        border-radius: 4px;
+        color: #aaa; font-size: 0.85em; white-space: pre-wrap; line-height: 1.4;
+        background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px;
     }
     
     .status-ok { color: #30d158; }
@@ -127,8 +100,7 @@ def manage_log_file(read_lines=100):
         with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
         if len(lines) > 200:
             lines = lines[-200:]
-            try:
-                with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
+            try: with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
             except: pass
         display_lines = lines[-read_lines:]
         display_lines.reverse()
@@ -153,24 +125,37 @@ def show_details(item_name, media_id):
         st.warning("尚無分析資料")
         return
 
+    # 🔥 遍歷每一季
     for s in subs:
         season_name = s['season']
         json_data = s['subtitle_tracks']
-        
-        with st.expander(f"📁 {season_name}", expanded=True):
-            try:
-                episodes = json.loads(json_data)
-                
-                # 統計
-                total = len(episodes)
-                missing = len([e for e in episodes if e['status'] != 'ok'])
-                
-                if missing == 0:
-                    st.success(f"✅ 全季完整 (共 {total} 集)")
-                else:
-                    st.error(f"❌ 缺少 {missing} 集 (共 {total} 集)")
+        episodes = []
+        total = 0
+        missing = 0
+        label = f"📁 {season_name}" # 預設標題
 
-                # 🔥 渲染列表 (List View) - 結構更新
+        # 1. 預先解析 JSON 以計算狀態
+        try:
+            episodes = json.loads(json_data)
+            total = len(episodes)
+            missing = len([e for e in episodes if e['status'] != 'ok'])
+            
+            # 🔥 2. 動態產生 Expander 標題
+            if missing == 0:
+                label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
+            else:
+                label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
+                
+        except:
+            label = f"📁 {season_name} (資料格式錯誤)"
+
+        # 3. 渲染 Expander
+        # 如果有缺集，預設展開 (expanded=True)，方便查看
+        is_expanded = (missing > 0)
+        
+        with st.expander(label, expanded=is_expanded):
+            try:
+                # 渲染列表
                 st.markdown('<div style="border: 1px solid #333; border-radius: 8px; overflow: hidden;">', unsafe_allow_html=True)
                 
                 for ep in episodes:
@@ -182,7 +167,6 @@ def show_details(item_name, media_id):
                     if "Stream #" in detail_text:
                         detail_text = "內嵌: " + detail_text.split("Stream #")[0] + "..."
                     
-                    # HTML 結構更新：新增 ep-content 包裹 name 和 detail
                     st.markdown(f"""
                     <div class="ep-list-row">
                         <div class="ep-status-icon {status_class}">{icon}</div>

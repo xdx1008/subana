@@ -37,10 +37,7 @@ def save_media(m_type, drive_id, name, full_path, sub_data):
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         try:
-            # 使用 Replace 邏輯：先刪除舊的，再新增新的 (確保 ID 變化或使用 REPLACE INTO 保持 ID)
-            # 這裡為了簡單，我們先查出舊 ID (若有)，以保持關聯，或者直接刪除重建
             c.execute("DELETE FROM media WHERE full_path = ?", (full_path,))
-            
             c.execute("INSERT INTO media (type, drive_id, name, full_path) VALUES (?, ?, ?, ?)",
                       (m_type, drive_id, name, full_path))
             media_id = c.lastrowid
@@ -48,7 +45,6 @@ def save_media(m_type, drive_id, name, full_path, sub_data):
             for item in sub_data:
                 c.execute("INSERT INTO subtitles (media_id, season, subtitle_tracks) VALUES (?, ?, ?)",
                           (media_id, item['season'], item['subs']))
-            
             conn.commit()
         except Exception as e:
             print(f"DB Error: {e}")
@@ -59,15 +55,26 @@ def get_all_media(filter_type=None, search_query=None):
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    query = "SELECT * FROM media WHERE 1=1"
+    
+    # 🔥 修改查詢：串聯 subtitles 表的資訊，以便在列表判斷語言
+    query = """
+        SELECT m.*, GROUP_CONCAT(s.subtitle_tracks, ' ') as all_subs 
+        FROM media m 
+        LEFT JOIN subtitles s ON m.id = s.media_id
+        WHERE 1=1 
+    """
     params = []
+    
     if filter_type and filter_type != "All":
-        query += " AND type = ?"
+        query += " AND m.type = ?"
         params.append(filter_type.lower())
+        
     if search_query:
-        query += " AND name LIKE ?"
+        query += " AND m.name LIKE ?"
         params.append(f"%{search_query}%")
-    query += " ORDER BY drive_id ASC, name ASC"
+        
+    query += " GROUP BY m.id ORDER BY m.drive_id ASC, m.name ASC"
+    
     c.execute(query, tuple(params))
     rows = c.fetchall()
     conn.close()
@@ -82,7 +89,6 @@ def get_subtitles(media_id):
     conn.close()
     return rows
 
-# 🔥 新增: 檢查路徑是否存在
 def check_media_exists(full_path):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -91,7 +97,6 @@ def check_media_exists(full_path):
     conn.close()
     return exists
 
-# 🔥 新增: 取得單一媒體資訊 (用於刷新)
 def get_media_by_id(media_id):
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row

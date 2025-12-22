@@ -38,7 +38,7 @@ st.markdown("""
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
-    /* 🔥 中文字幕標籤 (Check/Cross) */
+    /* 中文字幕標籤 */
     .chi-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; min-width: 60px; text-align: center; }
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
@@ -54,10 +54,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 輔助函式 ---
+
+# 🔥 修復點：正確的縮排語法
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        try: with open(CONFIG_FILE, 'r') as f: return json.load(f)
-        except: pass
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
@@ -80,11 +85,9 @@ def manage_log_file(max_lines=100):
         return "".join(formatted_html) if formatted_html else '<div class="log-line" style="color: #888;">Log 已清空</div>'
     except Exception as e: return f'<div class="log-line" style="color: red;">讀取日誌失敗: {str(e)}</div>'
 
-# 🔥 檢查是否有中文字幕的邏輯
 def has_chinese_subs(sub_text):
     if not sub_text: return False
     text = sub_text.lower()
-    # 關鍵字清單：根據 ffprobe 常見輸出擴充
     keywords = ['chi', 'zho', 'chinese', 'cht', 'chs', '繁體', '简体', 'mandarin']
     return any(k in text for k in keywords)
 
@@ -175,7 +178,6 @@ col_type, col_chi, col_search = st.columns([1.5, 1.5, 4])
 with col_type:
     filter_type = st.selectbox("類型", ["All", "Movie", "TV"], label_visibility="collapsed")
 with col_chi:
-    # 🔥 新增字幕篩選器
     filter_subs = st.selectbox("字幕狀態", ["全部顯示", "有中文字幕 (✅)", "無中文字幕 (❌)"], label_visibility="collapsed")
 with col_search:
     search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字並按 Enter 搜尋...", label_visibility="collapsed")
@@ -188,16 +190,12 @@ def render_library_list(f_type, s_query, f_subs):
         st.info("👋 資料庫目前是空的，請在左側點擊 **「🚀 開始全域掃描」**。")
         return
 
-    # --- Python 端進行字幕篩選 ---
+    # Python 端進行字幕篩選
     filtered_rows = []
     for row in rows:
         has_chi = has_chinese_subs(row['all_subs'])
-        
-        if f_subs == "有中文字幕 (✅)" and not has_chi:
-            continue
-        if f_subs == "無中文字幕 (❌)" and has_chi:
-            continue
-        
+        if f_subs == "有中文字幕 (✅)" and not has_chi: continue
+        if f_subs == "無中文字幕 (❌)" and has_chi: continue
         filtered_rows.append(row)
 
     st.caption(f"共 {len(filtered_rows)} 個項目")
@@ -206,7 +204,7 @@ def render_library_list(f_type, s_query, f_subs):
         has_chi = has_chinese_subs(row['all_subs'])
         
         with st.container(border=True):
-            # 調整比例 [1, 0.8, 3.5, ...] 
+            # 比例配置
             c1, c2, c3, c4, c5, c6 = st.columns([1, 0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
             # 1. 類型
@@ -215,7 +213,7 @@ def render_library_list(f_type, s_query, f_subs):
             else:
                 c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            # 2. 🔥 字幕標籤
+            # 2. 字幕標籤
             if has_chi:
                 c2.markdown('<div class="chi-badge chi-ok">✓ CHI</div>', unsafe_allow_html=True)
             else:

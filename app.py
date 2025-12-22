@@ -42,8 +42,8 @@ st.markdown("""
     /* 容器與卡片 */
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
-    /* 標籤 */
-    .type-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; width: 60px; text-align: center; letter-spacing: 0.5px; }
+    /* 標籤 (Badge) 優化 */
+    .type-badge { padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: bold; display: inline-block; width: 50px; text-align: center; letter-spacing: 0.5px; }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
 
@@ -67,20 +67,16 @@ st.markdown("""
     .log-line:last-child { border-bottom: none; }
     .log-line:nth-child(even) { background-color: rgba(255,255,255,0.02); }
 
-    /* 🔥 [修正重點] 字幕詳情文字樣式 */
+    /* 字幕詳情文字樣式 */
     .detail-text { 
-        font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; /* 更清晰的等寬字體 */
+        font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
         background: rgba(0,0,0,0.3); 
         padding: 15px; 
         border-radius: 8px; 
         font-size: 0.9em; 
         color: #e0e0e0; 
         border: 1px solid rgba(255,255,255,0.1);
-        
-        /* 關鍵屬性：保留換行符號 */
         white-space: pre-wrap; 
-        
-        /* 增加行高，讓每一行分開一點 */
         line-height: 1.8; 
     }
     
@@ -126,7 +122,6 @@ def show_details(item_name, media_id):
     else:
         for s in subs:
             with st.expander(f"📁 {s['season']}", expanded=True):
-                # 這裡會應用上面的 .detail-text CSS，確保換行
                 st.markdown(f"<div class='detail-text'>{s['subtitle_tracks']}</div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -204,10 +199,13 @@ col_filter, col_search = st.columns([1.5, 5])
 with col_filter:
     filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
 with col_search:
+    # 這裡移除了按鈕，單純依靠 Streamlit 的輸入更新機制
+    # 當使用者輸入文字並按 Enter (或點擊空白處) 時，變數會更新，觸發下方 Fragment 刷新
     search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字搜尋...", label_visibility="collapsed")
 
 @st.fragment(run_every=2)
 def render_library_list(f_type, s_query):
+    # 根據傳入的篩選條件即時查詢
     rows = get_all_media(f_type, s_query)
 
     if not rows:
@@ -220,11 +218,11 @@ def render_library_list(f_type, s_query):
         with st.container(border=True):
             c1, c2, c3, c4, c5 = st.columns([0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
-            # 1. 類型
+            # 1. 類型 (已修改為 TV)
             if row['type'] == 'movie':
                 c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else:
-                c1.markdown('<div class="type-badge tb-tv">TV SHOW</div>', unsafe_allow_html=True)
+                c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
             # 2. 名稱
             c2.markdown(f"**{row['name']}**")
@@ -242,4 +240,5 @@ def render_library_list(f_type, s_query):
             if c5.button("詳細", key=f"det_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 
+# 傳入篩選參數，實現隨打隨過濾
 render_library_list(filter_type, search_query)

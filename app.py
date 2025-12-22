@@ -20,7 +20,7 @@ st.markdown("""
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
-    /* 狀態卡片 & 按鈕 (保持 v8.0 樣式) */
+    /* 基本元件樣式 */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -38,7 +38,7 @@ st.markdown("""
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
 
-    /* 🔥 Log 終端機 (Auto-Scroll 核心技術) */
+    /* Log 終端機 (Auto-Scroll) */
     .log-terminal { 
         font-family: 'SF Mono', 'Menlo', monospace; 
         font-size: 11px; 
@@ -48,10 +48,8 @@ st.markdown("""
         border-radius: 8px; 
         height: 200px; 
         border: 1px solid #30363d; 
-        
-        /* 關鍵：使用 column-reverse 讓內容從底部開始堆疊 */
         display: flex; 
-        flex-direction: column-reverse; 
+        flex-direction: column-reverse; /* 置底關鍵 */
         overflow-y: auto; 
     }
     .log-line { 
@@ -59,22 +57,52 @@ st.markdown("""
         border-bottom: 1px solid rgba(255,255,255,0.03); 
         word-wrap: break-word; 
         white-space: pre-wrap; 
-        flex-shrink: 0; /* 防止被壓縮 */
+        flex-shrink: 0; 
     }
 
-    /* 🔥 集數列表 (List View) */
+    /* 🔥 [重點修改] 集數列表 (List View) - 垂直堆疊佈局 */
     .ep-list-row {
         display: flex;
-        align-items: center;
+        align-items: flex-start; /* 靠上對齊 */
         background: rgba(255,255,255,0.03);
         border-bottom: 1px solid rgba(255,255,255,0.05);
-        padding: 8px 12px;
+        padding: 12px 12px;
         font-size: 0.9em;
     }
     .ep-list-row:last-child { border-bottom: none; }
-    .ep-status-icon { margin-right: 12px; font-size: 1.1em; }
-    .ep-name { font-weight: 600; width: 150px; color: #fff; }
-    .ep-detail { flex-grow: 1; font-family: monospace; color: #aaa; font-size: 0.85em; white-space: pre-wrap; }
+    
+    .ep-status-icon { 
+        margin-right: 15px; 
+        font-size: 1.2em; 
+        min-width: 25px; /* 防止圖示被壓縮 */
+        margin-top: 2px; /* 微調對齊 */
+    }
+    
+    /* 右側內容容器 */
+    .ep-content {
+        display: flex;
+        flex-direction: column; /* 垂直排列 */
+        flex-grow: 1;
+        overflow: hidden; /* 防止撐開 */
+    }
+    
+    .ep-name { 
+        font-weight: 600; 
+        color: #fff; 
+        margin-bottom: 6px; /* 與下方詳情的距離 */
+        word-break: break-all; /* 長檔名自動換行 */
+    }
+    
+    .ep-detail { 
+        font-family: 'SF Mono', 'Consolas', monospace; 
+        color: #aaa; 
+        font-size: 0.85em; 
+        white-space: pre-wrap; 
+        line-height: 1.4;
+        background: rgba(0,0,0,0.2);
+        padding: 6px;
+        border-radius: 4px;
+    }
     
     .status-ok { color: #30d158; }
     .status-missing { color: #ff453a; }
@@ -94,40 +122,26 @@ def save_config(config):
     with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
 
 def manage_log_file(read_lines=100):
-    """
-    讀取 Log：讀取最後 N 行，但輸出時反轉順序。
-    配合 CSS column-reverse，達成「永遠顯示最新在最下面」的效果。
-    """
     if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
     try:
         with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
-        
-        # 截斷舊資料 (自動清理)
         if len(lines) > 200:
             lines = lines[-200:]
             try:
                 with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
             except: pass
-            
-        # 取最後 N 行顯示
         display_lines = lines[-read_lines:]
-        
-        # 🔥 關鍵：Python端反轉 List，讓最新的排在 List[0]
-        # CSS column-reverse 會把 List[0] 放在容器的最底部
         display_lines.reverse()
-        
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
     except: return "Log Error"
 
-# --- 核心邏輯：解析 JSON 判斷狀態 ---
+# --- 核心邏輯 ---
 def check_complete_status(all_subs_row):
-    # 簡單判斷：如果資料庫裡存的 JSON string 含有 "missing"，代表有缺集數
-    # 這是最快的方法，不用每次 render 都 load json
     if not all_subs_row: return False
     return "missing" not in all_subs_row
 
-# --- 詳細頁面：集數列表 ---
+# --- 詳細頁面 ---
 @st.dialog("媒體詳情 (Episodes)", width="large")
 def show_details(item_name, media_id):
     st.subheader(f"{item_name}")
@@ -156,23 +170,26 @@ def show_details(item_name, media_id):
                 else:
                     st.error(f"❌ 缺少 {missing} 集 (共 {total} 集)")
 
-                # 🔥 渲染列表 (List View)
+                # 🔥 渲染列表 (List View) - 結構更新
                 st.markdown('<div style="border: 1px solid #333; border-radius: 8px; overflow: hidden;">', unsafe_allow_html=True)
                 
                 for ep in episodes:
                     is_ok = ep['status'] == 'ok'
                     icon = "✅" if is_ok else "❌"
                     status_class = "status-ok" if is_ok else "status-missing"
-                    # 清理詳細資訊，避免顯示過多 ffprobe 垃圾訊息
+                    
                     detail_text = ep['detail']
-                    if "Stream #" in detail_text: # 簡化 ffprobe 輸出
+                    if "Stream #" in detail_text:
                         detail_text = "內嵌: " + detail_text.split("Stream #")[0] + "..."
                     
+                    # HTML 結構更新：新增 ep-content 包裹 name 和 detail
                     st.markdown(f"""
                     <div class="ep-list-row">
                         <div class="ep-status-icon {status_class}">{icon}</div>
-                        <div class="ep-name">{ep['name']}</div>
-                        <div class="ep-detail">{detail_text}</div>
+                        <div class="ep-content">
+                            <div class="ep-name">{ep['name']}</div>
+                            <div class="ep-detail">{detail_text}</div>
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
                 
@@ -209,7 +226,6 @@ with st.sidebar:
 @st.fragment(run_every=1)
 def log_section():
     with st.expander("💻 系統終端機", expanded=True):
-        # 讀取最後 100 行
         st.markdown(f'<div class="log-terminal">{manage_log_file(100)}</div>', unsafe_allow_html=True)
 log_section()
 

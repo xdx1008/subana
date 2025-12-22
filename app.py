@@ -3,8 +3,9 @@ import json
 import os
 import threading
 import time
+import posixpath
 from database import get_all_media, get_subtitles, clear_db
-from logic import run_library_scan, run_single_refresh, run_auto_fix
+from logic import run_library_scan, run_single_refresh, run_auto_fix, import_subs_from_folder, AlistClient
 
 # 設定路徑
 DATA_DIR = '/app/data'
@@ -47,6 +48,13 @@ st.markdown("""
     .ep-detail { font-family: 'SF Mono', 'Consolas', monospace; color: #aaa; font-size: 0.85em; white-space: pre-wrap; line-height: 1.4; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px; }
     .status-ok { color: #30d158; }
     .status-missing { color: #ff453a; }
+    
+    /* File Browser Styles */
+    .fb-row { display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #333; cursor: pointer; }
+    .fb-row:hover { background: rgba(255,255,255,0.05); }
+    .fb-icon { margin-right: 10px; width: 20px; text-align: center; }
+    .fb-name { flex-grow: 1; }
+    
     [data-testid="stStatusWidget"] { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -54,65 +62,95 @@ st.markdown("""
 # --- Config & Log ---
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            pass
+        try: return json.load(open(CONFIG_FILE, 'r'))
+        except: pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
 
 def manage_log_file(read_lines=100):
-    if not os.path.exists(LOG_FILE):
-        return '<div class="log-line">No logs...</div>'
+    if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
     try:
-        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-        
-        # 自動清理舊日誌
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
         if len(lines) > 200:
             lines = lines[-200:]
-            try:
-                # 🔥 這裡必須換行
-                with open(LOG_FILE, "w", encoding='utf-8') as f:
-                    f.writelines(lines)
-            except:
-                pass
-        
+            try: with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
+            except: pass
         display_lines = lines[-read_lines:]
         display_lines.reverse()
-        
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
-    except Exception as e:
-        return f'<div class="log-line">Log Error: {e}</div>'
+    except: return "Log Error"
 
 def check_complete_status(all_subs_row):
     if not all_subs_row: return False
     return "missing" not in all_subs_row
 
+# --- 檔案瀏覽器 Dialog ---
+@st.dialog("選擇字幕來源目錄", width="large")
+def file_browser_dialog(media_id, media_name):
+    st.subheader(f"匯入字幕至: {media_name}")
+    
+    config = load_config()
+    if not config.get('url') or not config.get('token'):
+        st.error("請先設定連線")
+        return
+
+    # 初始化路徑
+    if "fb_path" not in st.session_state:
+        st.session_state.fb_path = "/Cloud" # 預設根目錄
+
+    client = AlistClient(config['url'], config['token'])
+    
+    # 顯示目前路徑
+    c_path, c_up = st.columns([5, 1])
+    c_path.text_input("目前路徑", value=st.session_state.fb_path, disabled=True)
+    
+    if c_up.button("⬆️ 上一層"):
+        parent = posixpath.dirname(st.session_state.fb_path)
+        if parent == "/": parent = "/Cloud" # 簡單防呆
+        st.session_state.fb_path = parent
+        st.rerun()
+
+    st.markdown("---")
+
+    # 取得檔案列表
+    items = client.list_files(st.session_state.fb_path)
+    
+    if not items:
+        st.info("此目錄為空")
+    else:
+        # 排序：資料夾在前
+        items.sort(key=lambda x: (not x['is_dir'], x['name']))
+        
+        # 顯示列表 (只顯示資料夾，因為我們要選的是來源目錄)
+        for item in items:
+            col1, col2 = st.columns([0.1, 0.9])
+            
+            if item['is_dir']:
+                col1.write("📁")
+                if col2.button(item['name'], key=f"dir_{item['name']}"):
+                    st.session_state.fb_path = posixpath.join(st.session_state.fb_path, item['name'])
+                    st.rerun()
+            else:
+                pass # 這裡不顯示檔案，只讓用戶選目錄進入，最後選定「目前目錄」
+
+    st.markdown("---")
+    st.markdown(f"**將從 ` {st.session_state.fb_path} ` 匯入所有字幕檔**")
+    
+    if st.button("✅ 確認匯入此目錄字幕", type="primary", use_container_width=True):
+        st.toast("正在匯入並修復...", icon="⏳")
+        msg = import_subs_from_folder(config['url'], config['token'], media_id, st.session_state.fb_path)
+        st.success(msg)
+        time.sleep(2)
+        st.rerun()
+
+# --- 詳細頁面 ---
 @st.dialog("媒體詳情 (Episodes)", width="large")
 def show_details(item_name, media_id):
     st.subheader(f"{item_name}")
-    
-    c_btn1, c_btn2 = st.columns([1, 2])
-    conf = load_config()
-    
-    if c_btn1.button("🛠️ 一鍵修復字幕檔名", use_container_width=True):
-        if not conf.get('url'):
-            st.error("設定錯誤")
-        else:
-            with st.spinner("正在分析並修復..."):
-                msg = run_auto_fix(conf['url'], conf['token'], media_id)
-                st.success(msg)
-                time.sleep(1)
-                st.rerun()
-
     st.markdown("---")
-    
     subs = get_subtitles(media_id)
     if not subs:
         st.warning("尚無分析資料")
@@ -122,47 +160,39 @@ def show_details(item_name, media_id):
         season_name = s['season']
         json_data = s['subtitle_tracks']
         episodes = []
-        label = f"📁 {season_name}"
+        total = 0
         missing = 0
+        label = f"📁 {season_name}"
 
         try:
             episodes = json.loads(json_data)
             total = len(episodes)
             missing = len([e for e in episodes if e['status'] != 'ok'])
-            
-            if missing == 0:
-                label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
-            else:
-                label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
-        except:
-            label = f"📁 {season_name} (資料格式錯誤)"
+            if missing == 0: label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
+            else: label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
+        except: label = f"📁 {season_name} (Error)"
 
-        is_expanded = (missing > 0)
-        
-        with st.expander(label, expanded=is_expanded):
+        with st.expander(label, expanded=(missing > 0)):
             try:
                 st.markdown('<div style="border: 1px solid #333; border-radius: 8px; overflow: hidden;">', unsafe_allow_html=True)
                 for ep in episodes:
                     is_ok = ep['status'] == 'ok'
                     icon = "✅" if is_ok else "❌"
                     status_class = "status-ok" if is_ok else "status-missing"
-                    
-                    detail_text = ep['detail']
-                    if "Stream #" in detail_text:
-                        detail_text = "內嵌: " + detail_text.split("Stream #")[0] + "..."
+                    detail = ep['detail']
+                    if "Stream #" in detail: detail = "內嵌: " + detail.split("Stream #")[0] + "..."
                     
                     st.markdown(f"""
                     <div class="ep-list-row">
                         <div class="ep-status-icon {status_class}">{icon}</div>
                         <div class="ep-content">
                             <div class="ep-name">{ep['name']}</div>
-                            <div class="ep-detail">{detail_text}</div>
+                            <div class="ep-detail">{detail}</div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"資料解析錯誤: {e}")
+            except: pass
 
 # --- 主程式 ---
 config = load_config()
@@ -170,7 +200,6 @@ config = load_config()
 with st.sidebar:
     st.title("🎬 Subana")
     st.markdown("---")
-    
     with st.expander("⚙️ 連線設定"):
         with st.form("sidebar_config"):
             new_url = st.text_input("Alist URL", value=config.get("url", ""))
@@ -180,7 +209,6 @@ with st.sidebar:
                 config.update({"url": new_url.rstrip('/'), "token": new_token, "path": new_path})
                 save_config(config)
                 st.rerun()
-    
     st.markdown("---")
     if st.button("🚀 開始全域掃描", use_container_width=True):
         open(LOG_FILE, 'w').close()
@@ -188,7 +216,6 @@ with st.sidebar:
     if st.button("🗑️ 清空資料庫", use_container_width=True):
         clear_db(); st.rerun()
 
-# --- 主畫面 ---
 @st.fragment(run_every=1)
 def log_section():
     with st.expander("💻 系統終端機", expanded=True):
@@ -209,37 +236,37 @@ def render_list(v_filter, s_query):
     if not rows: return
 
     final_rows = []
-    
     for row in rows:
         is_complete = check_complete_status(row['all_subs'])
-
         if v_filter == "只顯示缺字幕 (Missing)" and is_complete: continue
         if v_filter == "只顯示完整 (Complete)" and not is_complete: continue
-        
         final_rows.append((row, is_complete))
 
     st.caption(f"共 {len(final_rows)} 個項目")
 
     for row, is_complete in final_rows:
         with st.container(border=True):
-            c1, c2, c3, c4, c5, c6 = st.columns([1, 0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
+            # 7 欄佈局
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([0.8, 0.8, 3, 0.8, 0.8, 0.8, 0.8], vertical_alignment="center")
             
             if row['type'] == 'movie': c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else: c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            if is_complete:
-                c2.markdown('<div class="chi-badge chi-ok">✓ ALL OK</div>', unsafe_allow_html=True)
-            else:
-                c2.markdown('<div class="chi-badge chi-no">✕ MISSING</div>', unsafe_allow_html=True)
+            if is_complete: c2.markdown('<div class="chi-badge chi-ok">✓ ALL OK</div>', unsafe_allow_html=True)
+            else: c2.markdown('<div class="chi-badge chi-no">✕ MISSING</div>', unsafe_allow_html=True)
             
             c3.markdown(f"**{row['name']}**")
             c4.caption(f"Drive {row['drive_id']}")
             
-            if c5.button("更新", key=f"u_{row['id']}", use_container_width=True):
+            # 🔥 匯入按鈕：打開 Dialog
+            if c5.button("📂 匯入", key=f"imp_{row['id']}", help="從其他目錄匯入並修復字幕", use_container_width=True):
+                file_browser_dialog(row['id'], row['name'])
+            
+            if c6.button("更新", key=f"u_{row['id']}", use_container_width=True):
                 st.toast(f"Updating {row['name']}...")
                 threading.Thread(target=run_single_refresh, args=(config['url'], config['token'], row['id'])).start()
             
-            if c6.button("詳細", key=f"d_{row['id']}", type="primary", use_container_width=True):
+            if c7.button("詳細", key=f"d_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
 
 render_list(view_filter, search_query)

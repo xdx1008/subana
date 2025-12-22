@@ -14,17 +14,14 @@ LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 # 頁面設定
 st.set_page_config(page_title="Subana", page_icon="🎬", layout="wide")
 
-# --- CSS 優化 (修復遮擋問題) ---
+# --- CSS 優化 ---
 st.markdown("""
 <style>
-    /* === 1. 解決遮擋問題的核心修正 === */
+    /* === 1. 解決遮擋問題 === */
     .block-container { 
-        padding-top: 4.5rem !important; /* 加大頂部間距，避開 Streamlit Header */
+        padding-top: 4.5rem !important;
         padding-bottom: 5rem;
     }
-    
-    /* 如果您想完全隱藏上方的 Streamlit 設定條 (紅線與漢堡選單)，請取消下面這行的註解 */
-    /* header { visibility: hidden; } */
 
     /* === 2. 全域樣式 === */
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
@@ -64,13 +61,28 @@ st.markdown("""
         border: 1px solid #30363d; 
         display: flex; 
         flex-direction: column; 
-        margin-top: 5px; /* 增加一點與 expander 標題的距離 */
+        margin-top: 5px;
     }
     .log-line { padding: 4px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; line-height: 1.4; }
     .log-line:last-child { border-bottom: none; }
     .log-line:nth-child(even) { background-color: rgba(255,255,255,0.02); }
 
-    .detail-text { font-family: monospace; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.85em; color: #eee; }
+    /* 🔥 [修正重點] 字幕詳情文字樣式 */
+    .detail-text { 
+        font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; /* 更清晰的等寬字體 */
+        background: rgba(0,0,0,0.3); 
+        padding: 15px; 
+        border-radius: 8px; 
+        font-size: 0.9em; 
+        color: #e0e0e0; 
+        border: 1px solid rgba(255,255,255,0.1);
+        
+        /* 關鍵屬性：保留換行符號 */
+        white-space: pre-wrap; 
+        
+        /* 增加行高，讓每一行分開一點 */
+        line-height: 1.8; 
+    }
     
     /* 隱藏原生 Spinner */
     [data-testid="stStatusWidget"] { visibility: hidden; }
@@ -114,6 +126,7 @@ def show_details(item_name, media_id):
     else:
         for s in subs:
             with st.expander(f"📁 {s['season']}", expanded=True):
+                # 這裡會應用上面的 .detail-text CSS，確保換行
                 st.markdown(f"<div class='detail-text'>{s['subtitle_tracks']}</div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -177,11 +190,9 @@ with st.sidebar:
 # 主畫面
 # ==========================================
 
-# 🔥 Log 區塊 (置頂 + 自動刷新 + 自動清理)
 @st.fragment(run_every=1)
 def log_section():
-    # expanded=True 預設展開
-    with st.expander("💻 系統終端機 (System Log)", expanded=True):
+    with st.expander("💻 系統終端機 (System Log)", expanded=False):
         log_html = manage_log_file(max_lines=100)
         st.markdown(f'<div class="log-terminal">{log_html}</div>', unsafe_allow_html=True)
 
@@ -189,14 +200,12 @@ log_section()
 
 st.subheader("📚 媒體庫 (Library)")
 
-# 篩選器 (Fragment 外部)
 col_filter, col_search = st.columns([1.5, 5])
 with col_filter:
     filter_type = st.selectbox("顯示類別", ["All", "Movie", "TV"], label_visibility="collapsed")
 with col_search:
-    search_query = st.text_input("搜尋媒體...", placeholder="搜尋關鍵字...", label_visibility="collapsed")
+    search_query = st.text_input("搜尋媒體...", placeholder="輸入關鍵字搜尋...", label_visibility="collapsed")
 
-# 🔥 媒體列表區塊 (自動刷新核心)
 @st.fragment(run_every=2)
 def render_library_list(f_type, s_query):
     rows = get_all_media(f_type, s_query)

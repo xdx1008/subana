@@ -3,10 +3,8 @@ import json
 import os
 import threading
 import time
-import posixpath
-import math
 from database import get_all_media, get_subtitles, clear_db
-from logic import run_library_scan, run_single_refresh, run_auto_fix, import_subs_from_folder, AlistClient
+from logic import run_library_scan, run_single_refresh
 
 # 設定路徑
 DATA_DIR = '/app/data'
@@ -22,7 +20,7 @@ st.markdown("""
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
-    /* 基本元件 */
+    /* 狀態卡片 & 按鈕 (保持 v8.0 樣式) */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -32,7 +30,7 @@ st.markdown("""
     .stButton button { border-radius: 8px !important; font-weight: 500; border: none; transition: transform 0.1s; }
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
-    /* 標籤 */
+    /* 標籤樣式 */
     .type-badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; display: inline-block; min-width: 50px; text-align: center; white-space: nowrap; }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
@@ -40,164 +38,103 @@ st.markdown("""
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
 
-    /* Log */
-    .log-terminal { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11px; background-color: #0d1117; color: #c9d1d9; padding: 10px; border-radius: 8px; height: 200px; border: 1px solid #30363d; display: flex; flex-direction: column-reverse; overflow-y: auto; }
-    .log-line { padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; flex-shrink: 0; }
+    /* 🔥 Log 終端機 (Auto-Scroll 核心技術) */
+    .log-terminal { 
+        font-family: 'SF Mono', 'Menlo', monospace; 
+        font-size: 11px; 
+        background-color: #0d1117; 
+        color: #c9d1d9; 
+        padding: 10px; 
+        border-radius: 8px; 
+        height: 200px; 
+        border: 1px solid #30363d; 
+        
+        /* 關鍵：使用 column-reverse 讓內容從底部開始堆疊 */
+        display: flex; 
+        flex-direction: column-reverse; 
+        overflow-y: auto; 
+    }
+    .log-line { 
+        padding: 2px 5px; 
+        border-bottom: 1px solid rgba(255,255,255,0.03); 
+        word-wrap: break-word; 
+        white-space: pre-wrap; 
+        flex-shrink: 0; /* 防止被壓縮 */
+    }
 
-    /* Episode List */
-    .ep-list-row { display: flex; align-items: flex-start; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.05); padding: 12px 12px; font-size: 0.9em; }
+    /* 🔥 集數列表 (List View) */
+    .ep-list-row {
+        display: flex;
+        align-items: center;
+        background: rgba(255,255,255,0.03);
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        padding: 8px 12px;
+        font-size: 0.9em;
+    }
     .ep-list-row:last-child { border-bottom: none; }
-    .ep-status-icon { margin-right: 15px; font-size: 1.2em; min-width: 25px; margin-top: 2px; }
-    .ep-content { display: flex; flex-direction: column; flex-grow: 1; overflow: hidden; }
-    .ep-name { font-weight: 600; color: #fff; margin-bottom: 6px; word-break: break-all; }
-    .ep-detail { font-family: 'SF Mono', 'Consolas', monospace; color: #aaa; font-size: 0.85em; white-space: pre-wrap; line-height: 1.4; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px; }
+    .ep-status-icon { margin-right: 12px; font-size: 1.1em; }
+    .ep-name { font-weight: 600; width: 150px; color: #fff; }
+    .ep-detail { flex-grow: 1; font-family: monospace; color: #aaa; font-size: 0.85em; white-space: pre-wrap; }
+    
     .status-ok { color: #30d158; }
     .status-missing { color: #ff453a; }
-    
+
     [data-testid="stStatusWidget"] { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 狀態初始化 ---
-if 'active_import_id' not in st.session_state:
-    st.session_state.active_import_id = None
-if 'active_import_name' not in st.session_state:
-    st.session_state.active_import_name = ""
-if 'page_number' not in st.session_state:
-    st.session_state.page_number = 1
-
 # --- Config & Log ---
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            pass
+        try: return json.load(open(CONFIG_FILE, 'r'))
+        except: pass
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
 
 def manage_log_file(read_lines=100):
-    if not os.path.exists(LOG_FILE):
-        return '<div class="log-line">No logs...</div>'
+    """
+    讀取 Log：讀取最後 N 行，但輸出時反轉順序。
+    配合 CSS column-reverse，達成「永遠顯示最新在最下面」的效果。
+    """
+    if not os.path.exists(LOG_FILE): return '<div class="log-line">No logs...</div>'
     try:
-        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
+        with open(LOG_FILE, "r", encoding='utf-8', errors='ignore') as f: lines = f.readlines()
         
+        # 截斷舊資料 (自動清理)
         if len(lines) > 200:
             lines = lines[-200:]
             try:
-                with open(LOG_FILE, "w", encoding='utf-8') as f:
-                    f.writelines(lines)
-            except:
-                pass
-        
+                with open(LOG_FILE, "w", encoding='utf-8') as f: f.writelines(lines)
+            except: pass
+            
+        # 取最後 N 行顯示
         display_lines = lines[-read_lines:]
+        
+        # 🔥 關鍵：Python端反轉 List，讓最新的排在 List[0]
+        # CSS column-reverse 會把 List[0] 放在容器的最底部
         display_lines.reverse()
         
         html = "".join([f'<div class="log-line">{l.strip()}</div>' for l in display_lines])
         return html if html else '<div class="log-line">Log Cleared</div>'
-    except Exception as e:
-        return f'<div class="log-line">Log Error: {e}</div>'
+    except: return "Log Error"
 
+# --- 核心邏輯：解析 JSON 判斷狀態 ---
 def check_complete_status(all_subs_row):
+    # 簡單判斷：如果資料庫裡存的 JSON string 含有 "missing"，代表有缺集數
+    # 這是最快的方法，不用每次 render 都 load json
     if not all_subs_row: return False
     return "missing" not in all_subs_row
 
-# --- 檔案瀏覽器 (持久化版) ---
-@st.dialog("選擇字幕來源目錄", width="large")
-def file_browser_dialog():
-    # 從 session state 讀取目標
-    media_id = st.session_state.active_import_id
-    media_name = st.session_state.active_import_name
-    
-    if not media_id:
-        st.rerun() # 狀態跑掉就關閉
-
-    st.subheader(f"匯入字幕至: {media_name}")
-    
-    config = load_config()
-    if not config.get('url') or not config.get('token'):
-        st.error("請先設定連線")
-        return
-
-    # 初始化路徑 (在 session 中，避免重整消失)
-    if "fb_path" not in st.session_state:
-        st.session_state.fb_path = "/Cloud"
-
-    client = AlistClient(config['url'], config['token'])
-    
-    # 導航列
-    c_path, c_up = st.columns([5, 1])
-    c_path.text_input("目前路徑", value=st.session_state.fb_path, disabled=True)
-    
-    # 判斷是否為根目錄 (允許回到 / )
-    current_path = st.session_state.fb_path
-    
-    if c_up.button("⬆️ 上一層"):
-        if current_path == "/":
-            pass # 已經是根，不動
-        else:
-            parent = posixpath.dirname(current_path)
-            st.session_state.fb_path = parent
-            st.rerun()
-
-    st.markdown("---")
-
-    # 取得檔案列表
-    items = client.list_files(st.session_state.fb_path)
-    
-    if not items:
-        st.info("此目錄為空")
-    else:
-        # 排序：資料夾在前
-        items.sort(key=lambda x: (not x['is_dir'], x['name']))
-        
-        # 顯示列表 (只顯示資料夾)
-        for item in items:
-            col1, col2 = st.columns([0.1, 0.9])
-            
-            if item['is_dir']:
-                col1.write("📁")
-                if col2.button(item['name'], key=f"dir_{item['name']}"):
-                    # 處理根目錄連接問題
-                    if st.session_state.fb_path == "/":
-                        new_path = "/" + item['name']
-                    else:
-                        new_path = posixpath.join(st.session_state.fb_path, item['name'])
-                    
-                    st.session_state.fb_path = new_path
-                    st.rerun()
-            else:
-                pass 
-
-    st.markdown("---")
-    st.markdown(f"**將從 ` {st.session_state.fb_path} ` 匯入所有字幕檔**")
-    
-    c_ok, c_cancel = st.columns(2)
-    if c_ok.button("✅ 確認匯入此目錄字幕", type="primary", use_container_width=True):
-        st.toast("正在匯入並修復...", icon="⏳")
-        msg = import_subs_from_folder(config['url'], config['token'], media_id, st.session_state.fb_path)
-        st.success(msg)
-        
-        # 任務完成，清除狀態並關閉視窗
-        st.session_state.active_import_id = None
-        time.sleep(2)
-        st.rerun()
-        
-    if c_cancel.button("取消", use_container_width=True):
-        st.session_state.active_import_id = None
-        st.rerun()
-
-# --- 詳細頁面 ---
+# --- 詳細頁面：集數列表 ---
 @st.dialog("媒體詳情 (Episodes)", width="large")
 def show_details(item_name, media_id):
     st.subheader(f"{item_name}")
     st.markdown("---")
+    
     subs = get_subtitles(media_id)
+    
     if not subs:
         st.warning("尚無分析資料")
         return
@@ -205,45 +142,44 @@ def show_details(item_name, media_id):
     for s in subs:
         season_name = s['season']
         json_data = s['subtitle_tracks']
-        episodes = []
-        total = 0
-        missing = 0
-        label = f"📁 {season_name}"
-
-        try:
-            episodes = json.loads(json_data)
-            total = len(episodes)
-            missing = len([e for e in episodes if e['status'] != 'ok'])
-            if missing == 0:
-                label = f"📁 {season_name} | ✅ 完整 ({total} 集)"
-            else:
-                label = f"📁 {season_name} | ❌ 缺 {missing} 集 (共 {total} 集)"
-        except:
-            label = f"📁 {season_name} (Error)"
-
-        with st.expander(label, expanded=(missing > 0)):
+        
+        with st.expander(f"📁 {season_name}", expanded=True):
             try:
+                episodes = json.loads(json_data)
+                
+                # 統計
+                total = len(episodes)
+                missing = len([e for e in episodes if e['status'] != 'ok'])
+                
+                if missing == 0:
+                    st.success(f"✅ 全季完整 (共 {total} 集)")
+                else:
+                    st.error(f"❌ 缺少 {missing} 集 (共 {total} 集)")
+
+                # 🔥 渲染列表 (List View)
                 st.markdown('<div style="border: 1px solid #333; border-radius: 8px; overflow: hidden;">', unsafe_allow_html=True)
+                
                 for ep in episodes:
                     is_ok = ep['status'] == 'ok'
                     icon = "✅" if is_ok else "❌"
                     status_class = "status-ok" if is_ok else "status-missing"
-                    detail = ep['detail']
-                    if "Stream #" in detail:
-                        detail = "內嵌: " + detail.split("Stream #")[0] + "..."
+                    # 清理詳細資訊，避免顯示過多 ffprobe 垃圾訊息
+                    detail_text = ep['detail']
+                    if "Stream #" in detail_text: # 簡化 ffprobe 輸出
+                        detail_text = "內嵌: " + detail_text.split("Stream #")[0] + "..."
                     
                     st.markdown(f"""
                     <div class="ep-list-row">
                         <div class="ep-status-icon {status_class}">{icon}</div>
-                        <div class="ep-content">
-                            <div class="ep-name">{ep['name']}</div>
-                            <div class="ep-detail">{detail}</div>
-                        </div>
+                        <div class="ep-name">{ep['name']}</div>
+                        <div class="ep-detail">{detail_text}</div>
                     </div>
                     """, unsafe_allow_html=True)
+                
                 st.markdown('</div>', unsafe_allow_html=True)
-            except:
-                pass
+
+            except Exception as e:
+                st.error(f"資料解析錯誤: {e}")
 
 # --- 主程式 ---
 config = load_config()
@@ -251,6 +187,7 @@ config = load_config()
 with st.sidebar:
     st.title("🎬 Subana")
     st.markdown("---")
+    
     with st.expander("⚙️ 連線設定"):
         with st.form("sidebar_config"):
             new_url = st.text_input("Alist URL", value=config.get("url", ""))
@@ -260,6 +197,7 @@ with st.sidebar:
                 config.update({"url": new_url.rstrip('/'), "token": new_token, "path": new_path})
                 save_config(config)
                 st.rerun()
+    
     st.markdown("---")
     if st.button("🚀 開始全域掃描", use_container_width=True):
         open(LOG_FILE, 'w').close()
@@ -267,15 +205,13 @@ with st.sidebar:
     if st.button("🗑️ 清空資料庫", use_container_width=True):
         clear_db(); st.rerun()
 
+# --- 主畫面 ---
 @st.fragment(run_every=1)
 def log_section():
     with st.expander("💻 系統終端機", expanded=True):
+        # 讀取最後 100 行
         st.markdown(f'<div class="log-terminal">{manage_log_file(100)}</div>', unsafe_allow_html=True)
 log_section()
-
-# 檢查是否需要開啟 Dialog (狀態持久化關鍵)
-if st.session_state.active_import_id:
-    file_browser_dialog()
 
 st.subheader("📚 媒體庫")
 
@@ -285,77 +221,43 @@ with c1:
 with c2:
     search_query = st.text_input("搜尋...", label_visibility="collapsed")
 
-# 這裡不使用 fragment，因為分頁狀態需要互動重繪
+@st.fragment(run_every=3)
 def render_list(v_filter, s_query):
     rows = get_all_media("All", s_query)
     if not rows: return
 
-    # 1. 資料篩選
-    filtered_rows = []
+    final_rows = []
+    
     for row in rows:
         is_complete = check_complete_status(row['all_subs'])
+
         if v_filter == "只顯示缺字幕 (Missing)" and is_complete: continue
         if v_filter == "只顯示完整 (Complete)" and not is_complete: continue
-        filtered_rows.append((row, is_complete))
+        
+        final_rows.append((row, is_complete))
 
-    # 2. 分頁邏輯 (優化卡頓關鍵)
-    ITEMS_PER_PAGE = 20
-    total_items = len(filtered_rows)
-    total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
-    
-    # 確保頁碼有效
-    if st.session_state.page_number > total_pages: st.session_state.page_number = 1
-    if st.session_state.page_number < 1: st.session_state.page_number = 1
-    
-    current_page = st.session_state.page_number
-    start_idx = (current_page - 1) * ITEMS_PER_PAGE
-    end_idx = start_idx + ITEMS_PER_PAGE
-    
-    page_rows = filtered_rows[start_idx:end_idx]
+    st.caption(f"共 {len(final_rows)} 個項目")
 
-    st.caption(f"共 {total_items} 個項目 (第 {current_page}/{total_pages} 頁)")
-
-    # 3. 渲染列表
-    for row, is_complete in page_rows:
+    for row, is_complete in final_rows:
         with st.container(border=True):
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([0.8, 0.8, 3, 0.8, 0.8, 0.8, 0.8], vertical_alignment="center")
+            c1, c2, c3, c4, c5, c6 = st.columns([1, 0.8, 3.5, 0.8, 0.8, 0.8], vertical_alignment="center")
             
             if row['type'] == 'movie': c1.markdown('<div class="type-badge tb-movie">MOVIE</div>', unsafe_allow_html=True)
             else: c1.markdown('<div class="type-badge tb-tv">TV</div>', unsafe_allow_html=True)
             
-            if is_complete: c2.markdown('<div class="chi-badge chi-ok">✓ ALL OK</div>', unsafe_allow_html=True)
-            else: c2.markdown('<div class="chi-badge chi-no">✕ MISSING</div>', unsafe_allow_html=True)
+            if is_complete:
+                c2.markdown('<div class="chi-badge chi-ok">✓ ALL OK</div>', unsafe_allow_html=True)
+            else:
+                c2.markdown('<div class="chi-badge chi-no">✕ MISSING</div>', unsafe_allow_html=True)
             
             c3.markdown(f"**{row['name']}**")
             c4.caption(f"Drive {row['drive_id']}")
             
-            # 🔥 匯入按鈕：設定狀態，觸發 Dialog
-            if c5.button("📂 匯入", key=f"imp_{row['id']}", help="從其他目錄匯入並修復字幕", use_container_width=True):
-                st.session_state.active_import_id = row['id']
-                st.session_state.active_import_name = row['name']
-                # 預設路徑設為當前媒體路徑
-                st.session_state.fb_path = row['full_path']
-                st.rerun()
-            
-            if c6.button("更新", key=f"u_{row['id']}", use_container_width=True):
+            if c5.button("更新", key=f"u_{row['id']}", use_container_width=True):
                 st.toast(f"Updating {row['name']}...")
                 threading.Thread(target=run_single_refresh, args=(config['url'], config['token'], row['id'])).start()
             
-            if c7.button("詳細", key=f"d_{row['id']}", type="primary", use_container_width=True):
+            if c6.button("詳細", key=f"d_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
-
-    # 4. 分頁控制器
-    if total_pages > 1:
-        c_prev, c_info, c_next = st.columns([1, 2, 1])
-        with c_prev:
-            if st.button("⬅️ 上一頁", disabled=(current_page <= 1), use_container_width=True):
-                st.session_state.page_number -= 1
-                st.rerun()
-        with c_info:
-            st.markdown(f"<div style='text-align: center; line-height: 2.5;'>Page {current_page} of {total_pages}</div>", unsafe_allow_html=True)
-        with c_next:
-            if st.button("下一頁 ➡️", disabled=(current_page >= total_pages), use_container_width=True):
-                st.session_state.page_number += 1
-                st.rerun()
 
 render_list(view_filter, search_query)

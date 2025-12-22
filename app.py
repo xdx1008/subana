@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import posixpath
+import math
 from database import get_all_media, get_subtitles, clear_db
 from logic import run_library_scan, run_single_refresh, run_auto_fix, import_subs_from_folder, AlistClient
 
@@ -21,6 +22,7 @@ st.markdown("""
     .stApp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     section[data-testid="stSidebar"] { background-color: #1c1c1e; }
     
+    /* 基本元件 */
     .status-card { background-color: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1); }
     .status-label { font-size: 0.75rem; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
     .status-value { font-size: 0.9rem; color: #ffffff; font-weight: 500; word-break: break-all; }
@@ -30,6 +32,7 @@ st.markdown("""
     .stButton button { border-radius: 8px !important; font-weight: 500; border: none; transition: transform 0.1s; }
     div[data-testid="stContainer"] { background-color: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
 
+    /* 標籤 */
     .type-badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; display: inline-block; min-width: 50px; text-align: center; white-space: nowrap; }
     .tb-movie { background-color: rgba(10, 132, 255, 0.15); color: #0a84ff; border: 1px solid rgba(10, 132, 255, 0.3); }
     .tb-tv { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
@@ -37,9 +40,11 @@ st.markdown("""
     .chi-ok { background-color: rgba(48, 209, 88, 0.15); color: #30d158; border: 1px solid rgba(48, 209, 88, 0.3); }
     .chi-no { background-color: rgba(255, 69, 58, 0.15); color: #ff453a; border: 1px solid rgba(255, 69, 58, 0.3); }
 
+    /* Log */
     .log-terminal { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11px; background-color: #0d1117; color: #c9d1d9; padding: 10px; border-radius: 8px; height: 200px; border: 1px solid #30363d; display: flex; flex-direction: column-reverse; overflow-y: auto; }
     .log-line { padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.03); word-wrap: break-word; white-space: pre-wrap; flex-shrink: 0; }
 
+    /* Episode List */
     .ep-list-row { display: flex; align-items: flex-start; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.05); padding: 12px 12px; font-size: 0.9em; }
     .ep-list-row:last-child { border-bottom: none; }
     .ep-status-icon { margin-right: 15px; font-size: 1.2em; min-width: 25px; margin-top: 2px; }
@@ -49,15 +54,17 @@ st.markdown("""
     .status-ok { color: #30d158; }
     .status-missing { color: #ff453a; }
     
-    /* File Browser Styles */
-    .fb-row { display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #333; cursor: pointer; }
-    .fb-row:hover { background: rgba(255,255,255,0.05); }
-    .fb-icon { margin-right: 10px; width: 20px; text-align: center; }
-    .fb-name { flex-grow: 1; }
-    
     [data-testid="stStatusWidget"] { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- 狀態初始化 ---
+if 'active_import_id' not in st.session_state:
+    st.session_state.active_import_id = None
+if 'active_import_name' not in st.session_state:
+    st.session_state.active_import_name = ""
+if 'page_number' not in st.session_state:
+    st.session_state.page_number = 1
 
 # --- Config & Log ---
 def load_config():
@@ -100,9 +107,16 @@ def check_complete_status(all_subs_row):
     if not all_subs_row: return False
     return "missing" not in all_subs_row
 
-# --- 檔案瀏覽器 Dialog ---
+# --- 檔案瀏覽器 (持久化版) ---
 @st.dialog("選擇字幕來源目錄", width="large")
-def file_browser_dialog(media_id, media_name):
+def file_browser_dialog():
+    # 從 session state 讀取目標
+    media_id = st.session_state.active_import_id
+    media_name = st.session_state.active_import_name
+    
+    if not media_id:
+        st.rerun() # 狀態跑掉就關閉
+
     st.subheader(f"匯入字幕至: {media_name}")
     
     config = load_config()
@@ -110,25 +124,26 @@ def file_browser_dialog(media_id, media_name):
         st.error("請先設定連線")
         return
 
-    # 初始化路徑：如果 session 中沒有，給一個預設值，但實際上我們會從外部按鈕傳入
+    # 初始化路徑 (在 session 中，避免重整消失)
     if "fb_path" not in st.session_state:
         st.session_state.fb_path = "/Cloud"
 
     client = AlistClient(config['url'], config['token'])
     
-    # 顯示目前路徑
+    # 導航列
     c_path, c_up = st.columns([5, 1])
     c_path.text_input("目前路徑", value=st.session_state.fb_path, disabled=True)
     
-    # 判斷是否為根目錄，如果是則禁用上一層
-    is_root = (st.session_state.fb_path == "/" or st.session_state.fb_path == "")
+    # 判斷是否為根目錄 (允許回到 / )
+    current_path = st.session_state.fb_path
     
-    if c_up.button("⬆️ 上一層", disabled=is_root):
-        # 自由導航：不設限，直接取 dirname
-        parent = posixpath.dirname(st.session_state.fb_path)
-        # 修正：posixpath.dirname("/") 回傳 "/"，不會報錯
-        st.session_state.fb_path = parent
-        st.rerun()
+    if c_up.button("⬆️ 上一層"):
+        if current_path == "/":
+            pass # 已經是根，不動
+        else:
+            parent = posixpath.dirname(current_path)
+            st.session_state.fb_path = parent
+            st.rerun()
 
     st.markdown("---")
 
@@ -141,15 +156,14 @@ def file_browser_dialog(media_id, media_name):
         # 排序：資料夾在前
         items.sort(key=lambda x: (not x['is_dir'], x['name']))
         
-        # 顯示列表 (只顯示資料夾，方便導航)
+        # 顯示列表 (只顯示資料夾)
         for item in items:
             col1, col2 = st.columns([0.1, 0.9])
             
             if item['is_dir']:
                 col1.write("📁")
                 if col2.button(item['name'], key=f"dir_{item['name']}"):
-                    # 進入子目錄
-                    # 注意：如果目前是 "/"，join 後會變成 "//name"，需要處理
+                    # 處理根目錄連接問題
                     if st.session_state.fb_path == "/":
                         new_path = "/" + item['name']
                     else:
@@ -163,12 +177,19 @@ def file_browser_dialog(media_id, media_name):
     st.markdown("---")
     st.markdown(f"**將從 ` {st.session_state.fb_path} ` 匯入所有字幕檔**")
     
-    if st.button("✅ 確認匯入此目錄字幕", type="primary", use_container_width=True):
+    c_ok, c_cancel = st.columns(2)
+    if c_ok.button("✅ 確認匯入此目錄字幕", type="primary", use_container_width=True):
         st.toast("正在匯入並修復...", icon="⏳")
-        # 執行匯入邏輯
         msg = import_subs_from_folder(config['url'], config['token'], media_id, st.session_state.fb_path)
         st.success(msg)
+        
+        # 任務完成，清除狀態並關閉視窗
+        st.session_state.active_import_id = None
         time.sleep(2)
+        st.rerun()
+        
+    if c_cancel.button("取消", use_container_width=True):
+        st.session_state.active_import_id = None
         st.rerun()
 
 # --- 詳細頁面 ---
@@ -252,6 +273,10 @@ def log_section():
         st.markdown(f'<div class="log-terminal">{manage_log_file(100)}</div>', unsafe_allow_html=True)
 log_section()
 
+# 檢查是否需要開啟 Dialog (狀態持久化關鍵)
+if st.session_state.active_import_id:
+    file_browser_dialog()
+
 st.subheader("📚 媒體庫")
 
 c1, c2 = st.columns([1.5, 5])
@@ -260,21 +285,38 @@ with c1:
 with c2:
     search_query = st.text_input("搜尋...", label_visibility="collapsed")
 
-@st.fragment(run_every=3)
+# 這裡不使用 fragment，因為分頁狀態需要互動重繪
 def render_list(v_filter, s_query):
     rows = get_all_media("All", s_query)
     if not rows: return
 
-    final_rows = []
+    # 1. 資料篩選
+    filtered_rows = []
     for row in rows:
         is_complete = check_complete_status(row['all_subs'])
         if v_filter == "只顯示缺字幕 (Missing)" and is_complete: continue
         if v_filter == "只顯示完整 (Complete)" and not is_complete: continue
-        final_rows.append((row, is_complete))
+        filtered_rows.append((row, is_complete))
 
-    st.caption(f"共 {len(final_rows)} 個項目")
+    # 2. 分頁邏輯 (優化卡頓關鍵)
+    ITEMS_PER_PAGE = 20
+    total_items = len(filtered_rows)
+    total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
+    
+    # 確保頁碼有效
+    if st.session_state.page_number > total_pages: st.session_state.page_number = 1
+    if st.session_state.page_number < 1: st.session_state.page_number = 1
+    
+    current_page = st.session_state.page_number
+    start_idx = (current_page - 1) * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
+    
+    page_rows = filtered_rows[start_idx:end_idx]
 
-    for row, is_complete in final_rows:
+    st.caption(f"共 {total_items} 個項目 (第 {current_page}/{total_pages} 頁)")
+
+    # 3. 渲染列表
+    for row, is_complete in page_rows:
         with st.container(border=True):
             c1, c2, c3, c4, c5, c6, c7 = st.columns([0.8, 0.8, 3, 0.8, 0.8, 0.8, 0.8], vertical_alignment="center")
             
@@ -287,10 +329,13 @@ def render_list(v_filter, s_query):
             c3.markdown(f"**{row['name']}**")
             c4.caption(f"Drive {row['drive_id']}")
             
-            # 🔥 修改點：點擊按鈕時，將當前媒體的 full_path 設為瀏覽器的初始路徑
+            # 🔥 匯入按鈕：設定狀態，觸發 Dialog
             if c5.button("📂 匯入", key=f"imp_{row['id']}", help="從其他目錄匯入並修復字幕", use_container_width=True):
+                st.session_state.active_import_id = row['id']
+                st.session_state.active_import_name = row['name']
+                # 預設路徑設為當前媒體路徑
                 st.session_state.fb_path = row['full_path']
-                file_browser_dialog(row['id'], row['name'])
+                st.rerun()
             
             if c6.button("更新", key=f"u_{row['id']}", use_container_width=True):
                 st.toast(f"Updating {row['name']}...")
@@ -298,5 +343,19 @@ def render_list(v_filter, s_query):
             
             if c7.button("詳細", key=f"d_{row['id']}", type="primary", use_container_width=True):
                 show_details(row['name'], row['id'])
+
+    # 4. 分頁控制器
+    if total_pages > 1:
+        c_prev, c_info, c_next = st.columns([1, 2, 1])
+        with c_prev:
+            if st.button("⬅️ 上一頁", disabled=(current_page <= 1), use_container_width=True):
+                st.session_state.page_number -= 1
+                st.rerun()
+        with c_info:
+            st.markdown(f"<div style='text-align: center; line-height: 2.5;'>Page {current_page} of {total_pages}</div>", unsafe_allow_html=True)
+        with c_next:
+            if st.button("下一頁 ➡️", disabled=(current_page >= total_pages), use_container_width=True):
+                st.session_state.page_number += 1
+                st.rerun()
 
 render_list(view_filter, search_query)

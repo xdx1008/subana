@@ -5,8 +5,15 @@ import os
 import posixpath
 import logging
 
-# 設定 Log 格式，輸出到檔案與控制台
-LOG_FILE = 'app.log'
+# --- 修改點：定義資料目錄與路徑 ---
+DATA_DIR = '/app/data'
+LOG_FILE = os.path.join(DATA_DIR, 'app.log')
+
+# 確保資料目錄存在 (若不存在則建立)
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+# 設定 Log
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -19,11 +26,14 @@ logging.basicConfig(
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.wmv')
 
 def run_analysis(alist_url, token, start_dir):
-    """主執行函式，接收外部傳入的設定參數"""
+    """主執行函式"""
     logging.info("="*30)
     logging.info(f"🚀 任務啟動，掃描目標: {start_dir}")
 
-    # --- 內部輔助函式 (使用閉包捕獲目前的 url/token) ---
+    # ... (以下內容保持不變，省略以節省篇幅) ...
+    # 請保留原本的 alist_api, get_raw_url, analyze_video, upload_report, process_folder 等函式
+    # 只要改上面路徑設定的部分即可
+    
     def alist_api(endpoint, method="POST", body=None):
         url = f"{alist_url}/api/fs/{endpoint}"
         headers = {"Authorization": token, "Content-Type": "application/json"}
@@ -48,7 +58,7 @@ def run_analysis(alist_url, token, start_dir):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0: return ["❌ 分析失敗 (Format Error)"]
-            if not result.stdout: return None # 無輸出視為無字幕軌
+            if not result.stdout: return None
 
             info = json.loads(result.stdout)
             streams = info.get('streams', [])
@@ -76,13 +86,12 @@ def run_analysis(alist_url, token, start_dir):
             return resp.json().get('code') == 200
         except: return False
 
-    # --- 遞迴處理邏輯 ---
     def process_folder(current_path):
         logging.info(f"📂 掃描目錄: {current_path}")
         list_data = alist_api("list", body={"path": current_path, "page": 1, "per_page": 0, "refresh": True})
         
         if not list_data or list_data.get('code') != 200:
-            logging.warning(f"   ⚠️ 無法讀取目錄 (可能權限不足或路徑錯誤): {current_path}")
+            logging.warning(f"   ⚠️ 無法讀取目錄: {current_path}")
             return
 
         items = list_data['data']['content']
@@ -91,15 +100,12 @@ def run_analysis(alist_url, token, start_dir):
         sub_folders = [i for i in items if i['is_dir']]
         videos = [i for i in items if not i['is_dir'] and i['name'].lower().endswith(VIDEO_EXTS)]
 
-        # 1. 先遞迴進入子目錄
         for folder in sub_folders:
             next_path = posixpath.join(current_path, folder['name'])
             process_folder(next_path)
 
-        # 2. 處理當前目錄的影片
         if videos:
             logging.info(f"🎬 在 {current_path} 發現 {len(videos)} 部影片，開始分析...")
-            
             report_lines = []
             report_lines.append(f"📁 目錄: {current_path}")
             report_lines.append("=" * 60)
@@ -123,7 +129,6 @@ def run_analysis(alist_url, token, start_dir):
                 
                 report_lines.append(f"{vid['name']:<40} | {sub_info}")
             
-            # 上傳報告
             parent_dir = posixpath.dirname(current_path)
             folder_name = posixpath.basename(current_path) or "Root"
             report_filename = f"{folder_name}_MediaInfo.txt"
@@ -135,9 +140,8 @@ def run_analysis(alist_url, token, start_dir):
                 logging.error(f"❌ 報告上傳失敗: {upload_path}")
             logging.info("-" * 30)
 
-    # 開始執行
     try:
         process_folder(start_dir)
         logging.info("🏁 任務結束")
     except Exception as e:
-        logging.critical(f"執行過程中發生未預期的錯誤: {e}")
+        logging.critical(f"執行錯誤: {e}")

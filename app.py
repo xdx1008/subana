@@ -16,6 +16,7 @@ from logic import (
 DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
+SCHEDULER_THREAD_NAME = "SubanaScheduler" # 🔥 排程執行緒名稱
 
 st.set_page_config(page_title="Subana", page_icon="🎬", layout="wide", initial_sidebar_state="expanded")
 
@@ -112,6 +113,7 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try: return json.load(open(CONFIG_FILE, 'r'))
         except: pass
+    # 🔥 新增 interval (秒) 與 auto_run (開關)
     return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
 
 def save_config(config):
@@ -134,6 +136,53 @@ def render_mini_log(lines=10):
     content = manage_log_file(lines)
     return f'<div class="mini-log-box">{content}</div>'
 
+# --- 🔥 Background Scheduler (定時任務) ---
+def background_scheduler_loop():
+    """
+    背景執行緒：每10秒檢查一次是否需要執行自動掃描
+    """
+    print(">>> Subana Scheduler Started <<<")
+    last_scan_time = 0
+    
+    while True:
+        try:
+            # 每次循環重新讀取 Config，確保設定即時生效
+            config = load_config()
+            
+            if config.get("auto_run", False):
+                interval = int(config.get("interval", 3600))
+                current_time = time.time()
+                
+                # 如果距離上次掃描超過設定間隔
+                if current_time - last_scan_time > interval:
+                    # 檢查必要參數
+                    if config.get("url") and config.get("token"):
+                        # 🔥 呼叫 logic.py 的掃描 (它已具備跳過已存在的邏輯)
+                        run_library_scan(config['url'], config['token'], config['path'])
+                        last_scan_time = time.time()
+                    else:
+                        print("Skipping auto-scan: Missing config")
+            
+            time.sleep(10) # 每10秒檢查一次設定
+            
+        except Exception as e:
+            print(f"Scheduler Error: {e}")
+            time.sleep(60) # 發生錯誤休息久一點
+
+def start_scheduler_if_needed():
+    """確保只有一個排程執行緒在跑"""
+    # 檢查是否已有同名執行緒
+    for t in threading.enumerate():
+        if t.name == SCHEDULER_THREAD_NAME:
+            return # 已在運行，直接返回
+            
+    # 啟動新執行緒
+    t = threading.Thread(target=background_scheduler_loop, name=SCHEDULER_THREAD_NAME, daemon=True)
+    t.start()
+
+# 🔥 啟動排程器 (在 App 載入時)
+start_scheduler_if_needed()
+
 # --- 🔥 CALLBACKS ---
 
 def reset_interaction_state():
@@ -149,7 +198,6 @@ def close_dialog():
     st.rerun()
 
 def reset_purge_state():
-    """切換目錄時重置刪除確認狀態"""
     st.session_state.confirm_purge = False
 
 # [Top Nav Callbacks]
@@ -192,12 +240,27 @@ def refresh_media_callback(mid, name):
 def settings_dialog():
     config = load_config()
     with st.form("conf_form"):
+        st.subheader("🔌 連線設定")
         new_url = st.text_input("Alist URL", config.get("url", ""))
         new_token = st.text_input("Token", config.get("token", ""), type="password")
         new_path = st.text_input("根目錄 (Scan Root)", config.get("path", "/Cloud"))
         
+        st.divider()
+        st.subheader("⏱️ 定時掃描 (Scheduler)")
+        
+        c_auto, c_int = st.columns([1, 2])
+        # 🔥 新增: 自動掃描設定
+        new_auto = c_auto.toggle("啟用自動掃描", value=config.get("auto_run", False))
+        new_interval = c_int.number_input("掃描間隔 (秒)", min_value=60, value=int(config.get("interval", 3600)), step=60)
+        
         if st.form_submit_button("💾 儲存設定", type="primary", use_container_width=True):
-            config.update({"url": new_url.rstrip('/'), "token": new_token, "path": new_path})
+            config.update({
+                "url": new_url.rstrip('/'), 
+                "token": new_token, 
+                "path": new_path,
+                "auto_run": new_auto,
+                "interval": new_interval
+            })
             save_config(config)
             st.toast("設定已儲存", icon="✅")
             time.sleep(0.5)
@@ -217,7 +280,6 @@ def file_manager_dialog():
 
     folder_names = list(folders.keys())
     
-    # 建立佈局容器
     top_area = st.container()
     st.markdown('<hr class="tight-hr">', unsafe_allow_html=True)
     list_area = st.container() 
@@ -245,18 +307,15 @@ def file_manager_dialog():
     # 1. 頂部區域
     with top_area:
         c_title, c_sel, c_del = st.columns([5, 3, 2], vertical_alignment="bottom", gap="small")
-        
         c_title.subheader(f"📂 {media_row['name']}")
-        
         selected_folder_name = c_sel.selectbox(
             "切換目錄", folder_names, 
             label_visibility="collapsed", 
             key="target_selector_mgr",
-            on_change=reset_purge_state # 切換時重置紅燈
+            on_change=reset_purge_state
         )
         target_path = folders[selected_folder_name]
 
-        # 🔥 [NEW] 刪除目錄 (雙重確認)
         with c_del:
             if not st.session_state.confirm_purge:
                 if st.button("🧨 刪除此目錄", type="primary", use_container_width=True, help="刪除整個資料夾，需二次確認"):
@@ -266,7 +325,6 @@ def file_manager_dialog():
                 c_sure, c_cancel = st.columns(2, gap="small")
                 if c_sure.button("⚠️ 確定?", type="primary", use_container_width=True):
                     run_task(log_area, execute_directory_purge, config['url'], config['token'], target_path, media_id, selected_folder_name, config.get('path', '/Cloud'))
-                # 🔥 這裡加上了 "取消" 文字
                 if c_cancel.button("❌ 取消", use_container_width=True):
                     st.session_state.confirm_purge = False
                     st.rerun()
@@ -275,13 +333,11 @@ def file_manager_dialog():
     with list_area:
         st.caption(f"📍 路徑: `{target_path}`")
         files = list_folder_files(config['url'], config['token'], target_path)
-        
         if not files:
             st.info("目錄為空")
         else:
             df_files = pd.DataFrame(files) 
             df_files.insert(0, "選取", False)
-            
             edited_df = st.data_editor(
                 df_files,
                 column_config={
@@ -297,19 +353,16 @@ def file_manager_dialog():
             if not edited_df.empty:
                 st.session_state.selected_files = set(edited_df[edited_df["選取"]]["name"].tolist())
 
-    # 3. 按鈕區 (3 欄: 刪選取 | 改名 | 上傳)
+    # 3. 按鈕區
     with btn_area:
         c1, c2, c3 = st.columns(3, vertical_alignment="bottom", gap="small")
-        
         with c1:
             if st.button("🗑️ 刪除選取", type="primary", disabled=not st.session_state.selected_files, use_container_width=True):
                 files_to_del = list(st.session_state.selected_files)
                 run_task(log_area, execute_file_deletion, config['url'], config['token'], target_path, files_to_del, config.get('path', '/Cloud'))
-        
         with c2:
             if st.button("🛠️ 檔名對齊", use_container_width=True):
                 run_task(log_area, execute_folder_rename, config['url'], config['token'], target_path)
-                
         with c3:
             uploaded_files = st.file_uploader(
                 "Upload", 

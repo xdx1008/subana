@@ -1,3 +1,6 @@
-requests
 streamlit
-streamlit-keyup
+pandas
+requests
+# 雖然程式碼沒直接 import numpy，但 pandas 依賴它
+# watchdog 用於 streamlit 的熱重載效能
+watchdog

@@ -8,6 +8,7 @@ import re
 import urllib.parse
 import tempfile
 import time
+import shutil
 from database import save_media, check_media_exists, get_media_by_id, delete_season_data
 
 # 設定 Log
@@ -23,6 +24,7 @@ logging.basicConfig(
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.iso', '.ts')
 SUB_EXTS = ('.srt', '.ass', '.ssa', '.vtt', '.sub', '.smi', '.sup')
 IMG_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.nfo', '.xml', '.txt')
+SUPPORTED_SUB_CODECS = ['subrip', 'ass', 'ssa', 'mov_text', 'webvtt', 'text']
 
 class AlistClient:
     def __init__(self, url, token):
@@ -104,16 +106,11 @@ class RcloneHandler:
             rel_path = alist_path[len(root_mount):].lstrip('/')
         else:
             rel_path = alist_path.lstrip('/')
-            
         parts = rel_path.split('/', 1)
         if len(parts) < 2: return f"{parts[0]}:/"
-        
         remote_name = parts[0]
         file_path = parts[1]
-        
-        if not file_path.startswith('/'):
-            file_path = '/' + file_path
-            
+        if not file_path.startswith('/'): file_path = '/' + file_path
         return f"{remote_name}:{file_path}"
 
     @staticmethod
@@ -128,7 +125,6 @@ class RcloneHandler:
             final_path = f"{remote_part}:/{fixed_path_part}"
         else:
             final_path = RcloneHandler._sanitize_name(rclone_path)
-
         try:
             cmd = f'rclone delete "{final_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -145,7 +141,6 @@ class RcloneHandler:
             final_folder_path = f"{remote}:/{fixed_folder}"
         else:
             final_folder_path = RcloneHandler._sanitize_name(rclone_folder_path)
-
         temp_file_path = None
         try:
             with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8', delete=False) as tf:
@@ -153,13 +148,10 @@ class RcloneHandler:
                     fixed_name = RcloneHandler._sanitize_name(name)
                     tf.write(fixed_name + "\n")
                 temp_file_path = tf.name
-            
             cmd = f'rclone delete "{final_folder_path}" --files-from "{temp_file_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-            
             if result.returncode == 0: return True, "Batch Success"
             else: return False, result.stderr.strip()
-                
         except Exception as e:
             return False, str(e)
         finally:
@@ -174,7 +166,6 @@ class RcloneHandler:
             final_path = f"{remote}:/{fixed_folder}"
         else:
             final_path = RcloneHandler._sanitize_name(rclone_folder_path)
-
         try:
             cmd = f'rclone purge "{final_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -247,26 +238,20 @@ def process_folder_videos(client, full_path, all_files):
     results = []
     video_files = [f for f in all_files if not f['is_dir'] and f['name'].lower().endswith(VIDEO_EXTS)]
     video_files.sort(key=lambda x: x['name'])
-
     for vid in video_files:
         ep_name = vid['name']
         logging.info(f"      Checking: {ep_name} ...")
-        
         has_ext, ext_name = check_external_sub(ep_name, all_files)
         if has_ext:
             logging.info(f"         ✅ 找到外部字幕: {ext_name}")
             results.append({"name": ep_name, "status": "ok", "type": "external", "detail": f"[外部] {ext_name}"})
             continue 
-        
         raw_url = client.get_raw_url(posixpath.join(full_path, ep_name))
         if raw_url:
             has_emb, track_info = has_chinese_embedded(raw_url)
-            if has_emb:
-                results.append({"name": ep_name, "status": "ok", "type": "embedded", "detail": f"[內嵌] {track_info}"})
-            else:
-                results.append({"name": ep_name, "status": "missing", "detail": track_info if track_info else "No subs found"})
-        else:
-            results.append({"name": ep_name, "status": "error", "detail": "Link Error"})
+            if has_emb: results.append({"name": ep_name, "status": "ok", "type": "embedded", "detail": f"[內嵌] {track_info}"})
+            else: results.append({"name": ep_name, "status": "missing", "detail": track_info if track_info else "No subs found"})
+        else: results.append({"name": ep_name, "status": "error", "detail": "Link Error"})
     return results
 
 def process_movie_item(client, drive_id, m_name, m_full_path):
@@ -478,7 +463,7 @@ def import_subs_to_target(alist_url, token, source_folder, target_folder):
     time.sleep(1); logging.info("🔄 執行改名對齊..."); execute_folder_rename(alist_url, token, target_folder)
     return "完成", []
 
-# --- 舊接口 ---
+# --- 主掃描邏輯 ---
 def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
     client = AlistClient(alist_url, token)
     logging.info("="*40)
@@ -498,7 +483,10 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for m in m_list:
                     if not m['is_dir']: continue
                     full = posixpath.join(m_path, m['name'])
-                    if check_media_exists(full): continue
+                    # 🔥 [v26.0] 檢查是否已存在資料庫，若有則跳過
+                    if check_media_exists(full):
+                        logging.info(f"   ⏭️ 跳過 (已存在資料庫): {m['name']}")
+                        continue
                     process_movie_item(client, drive_id, m['name'], full)
         if 'tv' in folder_map:
             t_path = posixpath.join(drive_full_path, folder_map['tv']); t_list = client.list_files(t_path)
@@ -506,7 +494,10 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for t in t_list:
                     if not t['is_dir']: continue
                     full = posixpath.join(t_path, t['name'])
-                    if check_media_exists(full): continue
+                    # 🔥 [v26.0] 檢查是否已存在資料庫，若有則跳過
+                    if check_media_exists(full):
+                        logging.info(f"   ⏭️ 跳過 (已存在資料庫): {t['name']}")
+                        continue
                     process_tv_item(client, drive_id, t['name'], full)
     logging.info("🏁 掃描結束！")
 

@@ -9,7 +9,8 @@ import urllib.parse
 import tempfile
 import time
 import shutil
-from database import save_media, check_media_exists, get_media_by_id, delete_season_data
+# 🔥 引入 get_media_by_path
+from database import save_media, check_media_exists, get_media_by_id, delete_season_data, get_media_by_path
 
 # 設定 Log
 DATA_DIR = '/app/data'
@@ -24,7 +25,6 @@ logging.basicConfig(
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.iso', '.ts')
 SUB_EXTS = ('.srt', '.ass', '.ssa', '.vtt', '.sub', '.smi', '.sup')
 IMG_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.nfo', '.xml', '.txt')
-SUPPORTED_SUB_CODECS = ['subrip', 'ass', 'ssa', 'mov_text', 'webvtt', 'text']
 
 class AlistClient:
     def __init__(self, url, token):
@@ -106,11 +106,16 @@ class RcloneHandler:
             rel_path = alist_path[len(root_mount):].lstrip('/')
         else:
             rel_path = alist_path.lstrip('/')
+            
         parts = rel_path.split('/', 1)
         if len(parts) < 2: return f"{parts[0]}:/"
+        
         remote_name = parts[0]
         file_path = parts[1]
-        if not file_path.startswith('/'): file_path = '/' + file_path
+        
+        if not file_path.startswith('/'):
+            file_path = '/' + file_path
+            
         return f"{remote_name}:{file_path}"
 
     @staticmethod
@@ -125,6 +130,7 @@ class RcloneHandler:
             final_path = f"{remote_part}:/{fixed_path_part}"
         else:
             final_path = RcloneHandler._sanitize_name(rclone_path)
+
         try:
             cmd = f'rclone delete "{final_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -141,6 +147,7 @@ class RcloneHandler:
             final_folder_path = f"{remote}:/{fixed_folder}"
         else:
             final_folder_path = RcloneHandler._sanitize_name(rclone_folder_path)
+
         temp_file_path = None
         try:
             with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8', delete=False) as tf:
@@ -148,10 +155,13 @@ class RcloneHandler:
                     fixed_name = RcloneHandler._sanitize_name(name)
                     tf.write(fixed_name + "\n")
                 temp_file_path = tf.name
+            
             cmd = f'rclone delete "{final_folder_path}" --files-from "{temp_file_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            
             if result.returncode == 0: return True, "Batch Success"
             else: return False, result.stderr.strip()
+                
         except Exception as e:
             return False, str(e)
         finally:
@@ -166,6 +176,7 @@ class RcloneHandler:
             final_path = f"{remote}:/{fixed_folder}"
         else:
             final_path = RcloneHandler._sanitize_name(rclone_folder_path)
+
         try:
             cmd = f'rclone purge "{final_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -238,20 +249,26 @@ def process_folder_videos(client, full_path, all_files):
     results = []
     video_files = [f for f in all_files if not f['is_dir'] and f['name'].lower().endswith(VIDEO_EXTS)]
     video_files.sort(key=lambda x: x['name'])
+
     for vid in video_files:
         ep_name = vid['name']
         logging.info(f"      Checking: {ep_name} ...")
+        
         has_ext, ext_name = check_external_sub(ep_name, all_files)
         if has_ext:
             logging.info(f"         ✅ 找到外部字幕: {ext_name}")
             results.append({"name": ep_name, "status": "ok", "type": "external", "detail": f"[外部] {ext_name}"})
             continue 
+        
         raw_url = client.get_raw_url(posixpath.join(full_path, ep_name))
         if raw_url:
             has_emb, track_info = has_chinese_embedded(raw_url)
-            if has_emb: results.append({"name": ep_name, "status": "ok", "type": "embedded", "detail": f"[內嵌] {track_info}"})
-            else: results.append({"name": ep_name, "status": "missing", "detail": track_info if track_info else "No subs found"})
-        else: results.append({"name": ep_name, "status": "error", "detail": "Link Error"})
+            if has_emb:
+                results.append({"name": ep_name, "status": "ok", "type": "embedded", "detail": f"[內嵌] {track_info}"})
+            else:
+                results.append({"name": ep_name, "status": "missing", "detail": track_info if track_info else "No subs found"})
+        else:
+            results.append({"name": ep_name, "status": "error", "detail": "Link Error"})
     return results
 
 def process_movie_item(client, drive_id, m_name, m_full_path):
@@ -265,24 +282,56 @@ def process_movie_item(client, drive_id, m_name, m_full_path):
     return False
 
 def process_tv_item(client, drive_id, t_name, t_full_path):
+    """
+    🔥 劇集處理邏輯 v26.2 (精細到季的跳過機制)
+    """
     logging.info(f"   📺 分析劇集: {t_name}")
+    
+    # 1. 獲取該劇集在資料庫中的現存狀態
+    existing_row = get_media_by_path(t_full_path)
+    existing_seasons_data = []
+    if existing_row and existing_row['all_subs']:
+        existing_seasons_data = json.loads(existing_row['all_subs'])
+    
+    # 建立現有季數的快速查找表 { 'Season 01': {data}, ... }
+    existing_season_map = {item['season']: item for item in existing_seasons_data}
+
+    # 2. 列出 Alist 目錄下的所有資料夾
     seasons = client.list_files(t_full_path)
     if not seasons: return False
-    season_data = []
+    
+    final_data = []
+    has_changes = False # 標記是否有新資料需要寫入
+
     for s in seasons:
         if not s['is_dir']: continue
         s_name = s['name']
         if "Season" not in s_name and "Specials" not in s_name: continue
+        
+        # 3. 🔥 檢查該季是否已存在資料庫
+        if s_name in existing_season_map:
+            logging.info(f"    ⏭️ 跳過 (已存在): {s_name}")
+            final_data.append(existing_season_map[s_name]) # 保留舊資料
+            continue
+        
+        # 4. 若不存在，進行解析
         s_path = posixpath.join(t_full_path, s_name)
         s_files = client.list_files(s_path)
         if not s_files: continue
-        logging.info(f"    👉 {s_name}")
+        
+        logging.info(f"    👉 解析新季: {s_name}")
         episodes = process_folder_videos(client, s_path, s_files)
         if episodes:
-            season_data.append({'season': s_name, 'subs': json.dumps(episodes)})
-    if season_data:
-        save_media('tv', drive_id, t_name, t_full_path, season_data)
+            final_data.append({'season': s_name, 'subs': json.dumps(episodes)})
+            has_changes = True
+
+    # 5. 如果有變動，或者原本不在資料庫中但現在掃描到了，就儲存
+    if has_changes or (not existing_row and final_data):
+        # 注意：final_data 包含了「舊的保留資料」+「新掃描的資料」
+        # save_media 會用這個完整的列表覆蓋掉 DB 裡的 all_subs，達成合併效果
+        save_media('tv', drive_id, t_name, t_full_path, final_data)
         return True
+    
     return False
 
 # --- 字幕管理器邏輯 ---
@@ -463,7 +512,7 @@ def import_subs_to_target(alist_url, token, source_folder, target_folder):
     time.sleep(1); logging.info("🔄 執行改名對齊..."); execute_folder_rename(alist_url, token, target_folder)
     return "完成", []
 
-# --- 主掃描邏輯 ---
+# --- 主掃描邏輯 (v26.2 季數級別跳過) ---
 def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
     client = AlistClient(alist_url, token)
     logging.info("="*40)
@@ -483,9 +532,9 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for m in m_list:
                     if not m['is_dir']: continue
                     full = posixpath.join(m_path, m['name'])
-                    # 🔥 [v26.0] 檢查是否已存在資料庫，若有則跳過
+                    # 電影：仍維持整個跳過
                     if check_media_exists(full):
-                        logging.info(f"   ⏭️ 跳過 (已存在資料庫): {m['name']}")
+                        logging.info(f"   ⏭️ 跳過 (已存在): {m['name']}")
                         continue
                     process_movie_item(client, drive_id, m['name'], full)
         if 'tv' in folder_map:
@@ -494,10 +543,7 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for t in t_list:
                     if not t['is_dir']: continue
                     full = posixpath.join(t_path, t['name'])
-                    # 🔥 [v26.0] 檢查是否已存在資料庫，若有則跳過
-                    if check_media_exists(full):
-                        logging.info(f"   ⏭️ 跳過 (已存在資料庫): {t['name']}")
-                        continue
+                    # 🔥 [v26.2] TV 不再整部跳過，而是進入 process_tv_item 內部進行季數比對
                     process_tv_item(client, drive_id, t['name'], full)
     logging.info("🏁 掃描結束！")
 

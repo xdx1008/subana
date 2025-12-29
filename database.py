@@ -1,119 +1,122 @@
 import sqlite3
+import json
 import os
-import threading
 
 DB_FILE = '/app/data/media.db'
-lock = threading.Lock()
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-    with lock:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS media (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT,
-                drive_id TEXT,
-                name TEXT,
-                full_path TEXT UNIQUE,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS subtitles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                media_id INTEGER,
-                season TEXT,
-                audio_tracks TEXT,
-                subtitle_tracks TEXT,
-                FOREIGN KEY(media_id) REFERENCES media(id) ON DELETE CASCADE
-            )
-        ''')
-        conn.commit()
-        conn.close()
+    if not os.path.exists('/app/data'):
+        os.makedirs('/app/data')
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS media (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            drive_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            full_path TEXT UNIQUE NOT NULL,
+            all_subs TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-def save_media(m_type, drive_id, name, full_path, sub_data):
-    with lock:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        try:
-            c.execute("DELETE FROM media WHERE full_path = ?", (full_path,))
-            c.execute("INSERT INTO media (type, drive_id, name, full_path) VALUES (?, ?, ?, ?)",
-                      (m_type, drive_id, name, full_path))
-            media_id = c.lastrowid
-            
-            for item in sub_data:
-                c.execute("INSERT INTO subtitles (media_id, season, subtitle_tracks) VALUES (?, ?, ?)",
-                          (media_id, item['season'], item['subs']))
-            conn.commit()
-        except Exception as e:
-            print(f"DB Error: {e}")
-        finally:
-            conn.close()
-
-def get_all_media(filter_type=None, search_query=None):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+def save_media(m_type, drive_id, name, full_path, all_subs):
+    conn = get_db_connection()
+    # 檢查是否存在
+    cur = conn.execute("SELECT id FROM media WHERE full_path = ?", (full_path,))
+    row = cur.fetchone()
     
-    # 🔥 修改查詢：串聯 subtitles 表的資訊，以便在列表判斷語言
-    query = """
-        SELECT m.*, GROUP_CONCAT(s.subtitle_tracks, ' ') as all_subs 
-        FROM media m 
-        LEFT JOIN subtitles s ON m.id = s.media_id
-        WHERE 1=1 
-    """
+    subs_json = json.dumps(all_subs)
+    
+    if row:
+        conn.execute("UPDATE media SET all_subs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (subs_json, row['id']))
+    else:
+        conn.execute("INSERT INTO media (type, drive_id, name, full_path, all_subs) VALUES (?, ?, ?, ?, ?)",
+                     (m_type, drive_id, name, full_path, subs_json))
+    conn.commit()
+    conn.close()
+
+def get_all_media(filter_type="All", search_term=""):
+    conn = get_db_connection()
+    query = "SELECT * FROM media WHERE 1=1"
     params = []
     
-    if filter_type and filter_type != "All":
-        query += " AND m.type = ?"
+    if filter_type != "All":
+        query += " AND type = ?"
         params.append(filter_type.lower())
         
-    if search_query:
-        query += " AND m.name LIKE ?"
-        params.append(f"%{search_query}%")
+    if search_term:
+        query += " AND name LIKE ?"
+        params.append(f"%{search_term}%")
         
-    query += " GROUP BY m.id ORDER BY m.drive_id ASC, m.name ASC"
+    query += " ORDER BY name ASC"
     
-    c.execute(query, tuple(params))
-    rows = c.fetchall()
+    cur = conn.execute(query, params)
+    rows = cur.fetchall()
     conn.close()
     return rows
-
-def get_subtitles(media_id):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT * FROM subtitles WHERE media_id = ? ORDER BY season ASC", (media_id,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def check_media_exists(full_path):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM media WHERE full_path = ?", (full_path,))
-    exists = c.fetchone() is not None
-    conn.close()
-    return exists
 
 def get_media_by_id(media_id):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT * FROM media WHERE id = ?", (media_id,))
-    row = c.fetchone()
+    conn = get_db_connection()
+    cur = conn.execute("SELECT * FROM media WHERE id = ?", (media_id,))
+    row = cur.fetchone()
     conn.close()
     return row
 
+def get_subtitles(media_id):
+    row = get_media_by_id(media_id)
+    if row and row['all_subs']:
+        return json.loads(row['all_subs'])
+    return []
+
+def check_media_exists(full_path):
+    conn = get_db_connection()
+    cur = conn.execute("SELECT id FROM media WHERE full_path = ?", (full_path,))
+    exists = cur.fetchone() is not None
+    conn.close()
+    return exists
+
 def clear_db():
-    with lock:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("DELETE FROM media")
-        c.execute("DELETE FROM subtitles")
+    conn = get_db_connection()
+    conn.execute("DELETE FROM media")
+    conn.commit()
+    conn.close()
+
+# 🔥 [v23.0 新增] 刪除指定季度的資料
+def delete_season_data(media_id, season_name):
+    conn = get_db_connection()
+    try:
+        cur = conn.execute("SELECT type, all_subs FROM media WHERE id = ?", (media_id,))
+        row = cur.fetchone()
+        if not row or not row['all_subs']: return
+
+        current_data = json.loads(row['all_subs'])
+        
+        # 如果是電影，且刪除的是 'Movie' 資料夾，則直接刪除整筆記錄
+        if row['type'] == 'movie' and season_name == 'Movie':
+            conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
+        else:
+            # 如果是劇集，過濾掉該季資料
+            new_data = [s for s in current_data if s.get('season') != season_name]
+            
+            if not new_data:
+                # 如果刪光了，清空 all_subs 還是刪除條目？這裡選擇清空內容保留條目
+                conn.execute("UPDATE media SET all_subs = ? WHERE id = ?", (json.dumps([]), media_id))
+            else:
+                conn.execute("UPDATE media SET all_subs = ? WHERE id = ?", (json.dumps(new_data), media_id))
+        
         conn.commit()
+    except Exception as e:
+        print(f"DB Delete Error: {e}")
+    finally:
         conn.close()
 
-if not os.path.exists('/app/data'): os.makedirs('/app/data')
+# 初始化
 init_db()

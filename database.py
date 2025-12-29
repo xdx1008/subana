@@ -70,6 +70,14 @@ def get_media_by_id(media_id):
     conn.close()
     return row
 
+# 🔥 [v26.2 新增] 根據路徑獲取媒體資訊 (用於比對季數)
+def get_media_by_path(full_path):
+    conn = get_db_connection()
+    cur = conn.execute("SELECT * FROM media WHERE full_path = ?", (full_path,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
 def get_subtitles(media_id):
     row = get_media_by_id(media_id)
     if row and row['all_subs']:
@@ -89,7 +97,6 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# 🔥 [v23.0 新增] 刪除指定季度的資料
 def delete_season_data(media_id, season_name):
     conn = get_db_connection()
     try:
@@ -99,18 +106,11 @@ def delete_season_data(media_id, season_name):
 
         current_data = json.loads(row['all_subs'])
         
-        # 如果是電影，且刪除的是 'Movie' 資料夾，則直接刪除整筆記錄
         if row['type'] == 'movie' and season_name == 'Movie':
             conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
         else:
-            # 如果是劇集，過濾掉該季資料
             new_data = [s for s in current_data if s.get('season') != season_name]
-            
-            if not new_data:
-                # 如果刪光了，清空 all_subs 還是刪除條目？這裡選擇清空內容保留條目
-                conn.execute("UPDATE media SET all_subs = ? WHERE id = ?", (json.dumps([]), media_id))
-            else:
-                conn.execute("UPDATE media SET all_subs = ? WHERE id = ?", (json.dumps(new_data), media_id))
+            conn.execute("UPDATE media SET all_subs = ? WHERE id = ?", (json.dumps(new_data), media_id))
         
         conn.commit()
     except Exception as e:

@@ -11,9 +11,10 @@ import time
 import shutil
 from database import save_media, check_media_exists, get_media_by_id, delete_season_data, get_media_by_path
 
-# 設定 Log
+# 設定路徑
 DATA_DIR = '/app/data'
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
+CONFIG_FILE = os.path.join(DATA_DIR, 'config.json') # 🔥 確保 logic 也能讀取設定
 
 logging.basicConfig(
     level=logging.INFO,
@@ -89,9 +90,25 @@ class AlistClient:
 
 class RcloneHandler:
     @staticmethod
+    def _get_base_cmd():
+        """
+        🔥 動態讀取設定檔，回傳帶有 config 參數的 rclone 指令
+        """
+        base_cmd = "rclone"
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    conf_path = config.get("rclone_conf", "")
+                    if conf_path and os.path.exists(conf_path):
+                        base_cmd = f'rclone --config "{conf_path}"'
+        except: pass
+        return base_cmd
+
+    @staticmethod
     def check_remotes():
         try:
-            cmd = "rclone listremotes"
+            cmd = f"{RcloneHandler._get_base_cmd()} listremotes"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0:
                 return True, result.stdout.strip()
@@ -132,7 +149,7 @@ class RcloneHandler:
             final_path = RcloneHandler._sanitize_name(rclone_path)
 
         try:
-            cmd = f'rclone delete "{final_path}" --retries 2'
+            cmd = f'{RcloneHandler._get_base_cmd()} delete "{final_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0: return True, "Success"
             else: return False, result.stderr.strip()
@@ -156,7 +173,7 @@ class RcloneHandler:
                     tf.write(fixed_name + "\n")
                 temp_file_path = tf.name
             
-            cmd = f'rclone delete "{final_folder_path}" --files-from "{temp_file_path}" --retries 2'
+            cmd = f'{RcloneHandler._get_base_cmd()} delete "{final_folder_path}" --files-from "{temp_file_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             
             if result.returncode == 0: return True, "Batch Success"
@@ -178,7 +195,7 @@ class RcloneHandler:
             final_path = RcloneHandler._sanitize_name(rclone_folder_path)
 
         try:
-            cmd = f'rclone purge "{final_path}" --retries 2'
+            cmd = f'{RcloneHandler._get_base_cmd()} purge "{final_path}" --retries 2'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0: return True, "Purge Success"
             else: return False, result.stderr.strip()
@@ -287,7 +304,6 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
     """
     logging.info(f"   📺 分析劇集: {t_name}")
     
-    # 1. 獲取現存狀態 (除非是強制刷新)
     existing_season_map = {}
     existing_row = None
     
@@ -297,8 +313,7 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
             data = json.loads(existing_row['all_subs'])
             existing_season_map = {item['season']: item for item in data}
     
-    # 2. 列出目錄
-    seasons = client.list_files(t_full_path, refresh=force) # 如果強制刷新，也強制刷新 API 列表
+    seasons = client.list_files(t_full_path, refresh=force)
     if not seasons: return False
     
     final_data = []
@@ -309,13 +324,11 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
         s_name = s['name']
         if "Season" not in s_name and "Specials" not in s_name: continue
         
-        # 3. 檢查跳過邏輯 (force=True 時不跳過)
         if not force and s_name in existing_season_map:
             logging.info(f"    ⏭️ 跳過 (已存在): {s_name}")
             final_data.append(existing_season_map[s_name])
             continue
         
-        # 4. 解析
         s_path = posixpath.join(t_full_path, s_name)
         s_files = client.list_files(s_path, refresh=force)
         if not s_files: continue
@@ -326,8 +339,6 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
             final_data.append({'season': s_name, 'subs': json.dumps(episodes)})
             has_changes = True
 
-    # 5. 儲存
-    # 如果是強制刷新，或者有新資料，或者原本沒資料，就儲存
     if force or has_changes or (not existing_row and final_data):
         save_media('tv', drive_id, t_name, t_full_path, final_data)
         return True
@@ -532,7 +543,6 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for m in m_list:
                     if not m['is_dir']: continue
                     full = posixpath.join(m_path, m['name'])
-                    # 電影：存在則跳過
                     if check_media_exists(full):
                         logging.info(f"   ⏭️ 跳過 (已存在): {m['name']}")
                         continue
@@ -543,7 +553,7 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for t in t_list:
                     if not t['is_dir']: continue
                     full = posixpath.join(t_path, t['name'])
-                    # 🔥 [v26.3] 即使劇集本身存在，也要進入檢查季數，這裡呼叫 force=False
+                    # 🔥 季數級別檢查交給 process_tv_item
                     process_tv_item(client, drive_id, t['name'], full, force=False)
     logging.info("🏁 掃描結束！")
 
@@ -553,7 +563,6 @@ def run_single_refresh(alist_url, token, media_id):
     if not row: return
     logging.info(f"🔄 [手動更新] 開始: {row['name']}")
     if row['type'] == 'movie': process_movie_item(client, row['drive_id'], row['name'], row['full_path'])
-    # 🔥 [v26.3] 手動刷新強制掃描 force=True
     elif row['type'] == 'tv': process_tv_item(client, row['drive_id'], row['name'], row['full_path'], force=True)
     logging.info(f"🏁 [手動更新] 完畢: {row['name']}")
 

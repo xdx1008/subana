@@ -70,8 +70,5 @@ VOLUME /app/data
 # 5. 開放埠口
 EXPOSE 8501
 
-# 6. 健康檢查 (可選)
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
-
 # 7. 啟動指令
 ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

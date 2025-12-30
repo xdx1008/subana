@@ -9,7 +9,6 @@ import urllib.parse
 import tempfile
 import time
 import shutil
-# 🔥 引入 get_media_by_path
 from database import save_media, check_media_exists, get_media_by_id, delete_season_data, get_media_by_path
 
 # 設定 Log
@@ -25,6 +24,7 @@ logging.basicConfig(
 VIDEO_EXTS = ('.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.iso', '.ts')
 SUB_EXTS = ('.srt', '.ass', '.ssa', '.vtt', '.sub', '.smi', '.sup')
 IMG_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.nfo', '.xml', '.txt')
+SUPPORTED_SUB_CODECS = ['subrip', 'ass', 'ssa', 'mov_text', 'webvtt', 'text']
 
 class AlistClient:
     def __init__(self, url, token):
@@ -281,54 +281,54 @@ def process_movie_item(client, drive_id, m_name, m_full_path):
         return True
     return False
 
-def process_tv_item(client, drive_id, t_name, t_full_path):
+def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
     """
-    🔥 劇集處理邏輯 v26.2 (精細到季的跳過機制)
+    🔥 劇集處理 (支援 force=True 手動強制刷新)
     """
     logging.info(f"   📺 分析劇集: {t_name}")
     
-    # 1. 獲取該劇集在資料庫中的現存狀態
-    existing_row = get_media_by_path(t_full_path)
-    existing_seasons_data = []
-    if existing_row and existing_row['all_subs']:
-        existing_seasons_data = json.loads(existing_row['all_subs'])
+    # 1. 獲取現存狀態 (除非是強制刷新)
+    existing_season_map = {}
+    existing_row = None
     
-    # 建立現有季數的快速查找表 { 'Season 01': {data}, ... }
-    existing_season_map = {item['season']: item for item in existing_seasons_data}
-
-    # 2. 列出 Alist 目錄下的所有資料夾
-    seasons = client.list_files(t_full_path)
+    if not force:
+        existing_row = get_media_by_path(t_full_path)
+        if existing_row and existing_row['all_subs']:
+            data = json.loads(existing_row['all_subs'])
+            existing_season_map = {item['season']: item for item in data}
+    
+    # 2. 列出目錄
+    seasons = client.list_files(t_full_path, refresh=force) # 如果強制刷新，也強制刷新 API 列表
     if not seasons: return False
     
     final_data = []
-    has_changes = False # 標記是否有新資料需要寫入
+    has_changes = False
 
     for s in seasons:
         if not s['is_dir']: continue
         s_name = s['name']
         if "Season" not in s_name and "Specials" not in s_name: continue
         
-        # 3. 🔥 檢查該季是否已存在資料庫
-        if s_name in existing_season_map:
+        # 3. 檢查跳過邏輯 (force=True 時不跳過)
+        if not force and s_name in existing_season_map:
             logging.info(f"    ⏭️ 跳過 (已存在): {s_name}")
-            final_data.append(existing_season_map[s_name]) # 保留舊資料
+            final_data.append(existing_season_map[s_name])
             continue
         
-        # 4. 若不存在，進行解析
+        # 4. 解析
         s_path = posixpath.join(t_full_path, s_name)
-        s_files = client.list_files(s_path)
+        s_files = client.list_files(s_path, refresh=force)
         if not s_files: continue
         
-        logging.info(f"    👉 解析新季: {s_name}")
+        logging.info(f"    👉 解析季: {s_name} {'(強制)' if force else ''}")
         episodes = process_folder_videos(client, s_path, s_files)
         if episodes:
             final_data.append({'season': s_name, 'subs': json.dumps(episodes)})
             has_changes = True
 
-    # 5. 如果有變動，或者原本不在資料庫中但現在掃描到了，就儲存
-    if has_changes or (not existing_row and final_data):
-        # 注意：final_data 包含了「舊的保留資料」+「新掃描的資料」
-        # save_media 會用這個完整的列表覆蓋掉 DB 裡的 all_subs，達成合併效果
+    # 5. 儲存
+    # 如果是強制刷新，或者有新資料，或者原本沒資料，就儲存
+    if force or has_changes or (not existing_row and final_data):
         save_media('tv', drive_id, t_name, t_full_path, final_data)
         return True
     
@@ -512,7 +512,7 @@ def import_subs_to_target(alist_url, token, source_folder, target_folder):
     time.sleep(1); logging.info("🔄 執行改名對齊..."); execute_folder_rename(alist_url, token, target_folder)
     return "完成", []
 
-# --- 主掃描邏輯 (v26.2 季數級別跳過) ---
+# --- 主掃描邏輯 ---
 def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
     client = AlistClient(alist_url, token)
     logging.info("="*40)
@@ -532,7 +532,7 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for m in m_list:
                     if not m['is_dir']: continue
                     full = posixpath.join(m_path, m['name'])
-                    # 電影：仍維持整個跳過
+                    # 電影：存在則跳過
                     if check_media_exists(full):
                         logging.info(f"   ⏭️ 跳過 (已存在): {m['name']}")
                         continue
@@ -543,8 +543,8 @@ def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
                 for t in t_list:
                     if not t['is_dir']: continue
                     full = posixpath.join(t_path, t['name'])
-                    # 🔥 [v26.2] TV 不再整部跳過，而是進入 process_tv_item 內部進行季數比對
-                    process_tv_item(client, drive_id, t['name'], full)
+                    # 🔥 [v26.3] 即使劇集本身存在，也要進入檢查季數，這裡呼叫 force=False
+                    process_tv_item(client, drive_id, t['name'], full, force=False)
     logging.info("🏁 掃描結束！")
 
 def run_single_refresh(alist_url, token, media_id):
@@ -553,7 +553,8 @@ def run_single_refresh(alist_url, token, media_id):
     if not row: return
     logging.info(f"🔄 [手動更新] 開始: {row['name']}")
     if row['type'] == 'movie': process_movie_item(client, row['drive_id'], row['name'], row['full_path'])
-    elif row['type'] == 'tv': process_tv_item(client, row['drive_id'], row['name'], row['full_path'])
+    # 🔥 [v26.3] 手動刷新強制掃描 force=True
+    elif row['type'] == 'tv': process_tv_item(client, row['drive_id'], row['name'], row['full_path'], force=True)
     logging.info(f"🏁 [手動更新] 完畢: {row['name']}")
 
 def run_auto_fix(alist_url, token, media_id): pass

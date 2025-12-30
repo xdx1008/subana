@@ -16,7 +16,7 @@ from logic import (
 DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
-SCHEDULER_THREAD_NAME = "SubanaScheduler" # 🔥 排程執行緒名稱
+SCHEDULER_THREAD_NAME = "SubanaScheduler"
 
 st.set_page_config(page_title="Subana", page_icon="🎬", layout="wide", initial_sidebar_state="expanded")
 
@@ -113,8 +113,11 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try: return json.load(open(CONFIG_FILE, 'r'))
         except: pass
-    # 🔥 新增 interval (秒) 與 auto_run (開關)
-    return {"url": "", "token": "", "path": "/Cloud", "interval": 3600, "auto_run": False}
+    return {
+        "url": "", "token": "", "path": "/Cloud", 
+        "interval": 3600, "auto_run": False,
+        "rclone_conf": "/root/.config/rclone/rclone.conf" # 預設值
+    }
 
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=2)
@@ -136,51 +139,28 @@ def render_mini_log(lines=10):
     content = manage_log_file(lines)
     return f'<div class="mini-log-box">{content}</div>'
 
-# --- 🔥 Background Scheduler (定時任務) ---
+# --- 🔥 Background Scheduler ---
 def background_scheduler_loop():
-    """
-    背景執行緒：每10秒檢查一次是否需要執行自動掃描
-    """
-    print(">>> Subana Scheduler Started <<<")
     last_scan_time = 0
-    
     while True:
         try:
-            # 每次循環重新讀取 Config，確保設定即時生效
             config = load_config()
-            
             if config.get("auto_run", False):
                 interval = int(config.get("interval", 3600))
                 current_time = time.time()
-                
-                # 如果距離上次掃描超過設定間隔
                 if current_time - last_scan_time > interval:
-                    # 檢查必要參數
                     if config.get("url") and config.get("token"):
-                        # 🔥 呼叫 logic.py 的掃描 (它已具備跳過已存在的邏輯)
                         run_library_scan(config['url'], config['token'], config['path'])
                         last_scan_time = time.time()
-                    else:
-                        print("Skipping auto-scan: Missing config")
-            
-            time.sleep(10) # 每10秒檢查一次設定
-            
-        except Exception as e:
-            print(f"Scheduler Error: {e}")
-            time.sleep(60) # 發生錯誤休息久一點
+            time.sleep(10)
+        except Exception: time.sleep(60)
 
 def start_scheduler_if_needed():
-    """確保只有一個排程執行緒在跑"""
-    # 檢查是否已有同名執行緒
     for t in threading.enumerate():
-        if t.name == SCHEDULER_THREAD_NAME:
-            return # 已在運行，直接返回
-            
-    # 啟動新執行緒
+        if t.name == SCHEDULER_THREAD_NAME: return
     t = threading.Thread(target=background_scheduler_loop, name=SCHEDULER_THREAD_NAME, daemon=True)
     t.start()
 
-# 🔥 啟動排程器 (在 App 載入時)
 start_scheduler_if_needed()
 
 # --- 🔥 CALLBACKS ---
@@ -245,11 +225,12 @@ def settings_dialog():
         new_token = st.text_input("Token", config.get("token", ""), type="password")
         new_path = st.text_input("根目錄 (Scan Root)", config.get("path", "/Cloud"))
         
+        # 🔥 [v27.0] 新增 Rclone Config 設定
+        new_rclone_conf = st.text_input("Rclone Config Path", config.get("rclone_conf", "/root/.config/rclone/rclone.conf"), help="容器內的路徑")
+        
         st.divider()
         st.subheader("⏱️ 定時掃描 (Scheduler)")
-        
         c_auto, c_int = st.columns([1, 2])
-        # 🔥 新增: 自動掃描設定
         new_auto = c_auto.toggle("啟用自動掃描", value=config.get("auto_run", False))
         new_interval = c_int.number_input("掃描間隔 (秒)", min_value=60, value=int(config.get("interval", 3600)), step=60)
         
@@ -259,7 +240,8 @@ def settings_dialog():
                 "token": new_token, 
                 "path": new_path,
                 "auto_run": new_auto,
-                "interval": new_interval
+                "interval": new_interval,
+                "rclone_conf": new_rclone_conf
             })
             save_config(config)
             st.toast("設定已儲存", icon="✅")
@@ -353,7 +335,7 @@ def file_manager_dialog():
             if not edited_df.empty:
                 st.session_state.selected_files = set(edited_df[edited_df["選取"]]["name"].tolist())
 
-    # 3. 按鈕區
+    # 3. 按鈕區 (4 欄: 刪除 | 整季 | 改名 | 上傳)
     with btn_area:
         c1, c2, c3 = st.columns(3, vertical_alignment="bottom", gap="small")
         with c1:

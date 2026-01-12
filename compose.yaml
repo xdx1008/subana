@@ -6,9 +6,9 @@ services:
     ports:
       - "8501:8080"
     volumes:
-      - /Users/xiao/Web/subana:/app/data
-      - /Users/xiao/Web/rclone:/app/rclone
-      - /Volumes/Drive/data/media:/media
+      - ./app/data
+      - ./app/rclone
+      - ./media
     environment:
       - TZ=Asia/Taipei # 設定時區，讓日誌時間正
       - PYTHONUNBUFFERED=1

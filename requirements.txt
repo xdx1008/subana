@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+websockets
+requests
+jinja2
+python-multipart

@@ -1,0 +1,14 @@
+services:
+  subana:
+    build: .
+    container_name: subana-test
+    restart: always
+    ports:
+      - "8501:8080"
+    volumes:
+      - /Users/xiao/Web/subana:/app/data
+      - /Users/xiao/Web/rclone:/app/rclone
+      - /Volumes/Drive/data/media:/media
+    environment:
+      - TZ=Asia/Taipei # 設定時區，讓日誌時間正
+      - PYTHONUNBUFFERED=1

@@ -186,8 +186,20 @@
          <div class="d-flex align-center px-4 py-2 bg-[#1E1E1E] border-b border-grey-darken-3">
              <v-app-bar-nav-icon v-if="mobile" variant="text" @click.stop="drawer = !drawer" class="mr-2"></v-app-bar-nav-icon>
              <div class="text-subtitle-2 font-weight-bold text-grey-lighten-1">System Logs</div>
+             <v-spacer></v-spacer>
+             <div v-if="autoScrollPaused" class="text-caption text-warning d-flex align-center fade-transition">
+                 <v-icon size="x-small" class="mr-1">mdi-pause-circle-outline</v-icon> Auto-scroll Paused
+             </div>
          </div>
-         <div class="flex-grow-1 pa-4 overflow-y-auto" ref="logBox">
+         
+         <div 
+            class="flex-grow-1 pa-4 overflow-y-auto" 
+            ref="logBox"
+            @wheel="handleLogUserInteraction"
+            @touchmove="handleLogUserInteraction"
+            @mousedown="handleLogUserInteraction"
+            @keydown="handleLogUserInteraction"
+         >
              <div v-if="!logContent" class="text-grey-darken-2 text-center mt-10">No logs available yet...</div>
              <div class="mono-font text-caption text-grey-lighten-1" style="white-space: pre-wrap; line-height: 1.5; font-family: 'Consolas', monospace;">{{ logContent }}</div>
          </div>
@@ -411,11 +423,15 @@ const fmHeaders = [ { title: 'Name', key: 'name', align: 'start', sortable: true
 const getRaw = (item) => item && item.raw ? item.raw : item
 const fmDialog = ref(false); const detailsDialog = ref(false); const selectedMedia = ref(null); const detailData = ref(null); const folderList = ref([]); const currentFolder = ref(''); const fileList = ref([]); const selectedFiles = ref([]); const uploadFiles = ref([])
 
+// [MODIFIED] New state for Log Pause
+const autoScrollPaused = ref(false)
+let logPauseTimer = null
+
 axios.defaults.baseURL = '/'
 const fetchConfig = async () => { try { const r = await axios.get('api/config'); config.value = r.data } catch(e){ console.error(e) } }
 const saveConfig = async () => { try { await axios.post('api/config', config.value); showMsg('Settings Saved'); await fetchConfig(); await fetchStatus() } catch(e) { showMsg('Error'); console.error(e) } }
 const fetchStatus = async (force=false) => { if(force) checkingSpace.value=true; try { const r = await axios.get(`api/status?refresh_space=${force}`); Object.assign(status, r.data); if(force) showMsg('Space Updated') } catch(e){ console.error(e) } finally { checkingSpace.value = false } }
-const fetchLogs = async () => { try { const r = await axios.get('api/logs'); logContent.value = r.data.logs.join(''); nextTick(() => { if(logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight }) } catch(e) {} }
+const fetchLogs = async () => { try { const r = await axios.get('api/logs'); logContent.value = r.data.logs.join(''); nextTick(() => { if(!autoScrollPaused.value && logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight }) } catch(e) {} }
 const startLogPolling = () => { stopLogPolling(); fetchLogs(); logPoller = setInterval(fetchLogs, 2000) }
 const stopLogPolling = () => { if (logPoller) clearInterval(logPoller); logPoller = null }
 
@@ -424,6 +440,28 @@ const changeView = (view) => {
     if (mobile.value) {
         drawer.value = false
     }
+}
+
+// [MODIFIED] Helper for scrolling to bottom
+const scrollToBottom = () => {
+    if (logBox.value) {
+        logBox.value.scrollTop = logBox.value.scrollHeight
+    }
+}
+
+// [MODIFIED] Handle User Interaction with Logs
+const handleLogUserInteraction = () => {
+    // 1. Pause auto-scroll immediately
+    autoScrollPaused.value = true
+    
+    // 2. Reset existing timer
+    if (logPauseTimer) clearTimeout(logPauseTimer)
+    
+    // 3. Set new 10-second timer to resume
+    logPauseTimer = setTimeout(() => {
+        autoScrollPaused.value = false
+        scrollToBottom()
+    }, 10000)
 }
 
 watch(currentView, (newVal) => { if (newVal === 'logs') startLogPolling(); else stopLogPolling() })
@@ -461,8 +499,6 @@ const uploadSubtitles = async (files) => { if (!files || files.length === 0) ret
 
 const formatTime = (ts) => { if (!ts) return 'Never'; const d = new Date(ts * 1000); return d.toLocaleString('zh-TW', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12: false}) }
 
-// [MODIFIED] Removed getNextSyncTime function from here, as logic moved to backend
-
 let ws = null
 const connectWs = () => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -470,7 +506,15 @@ const connectWs = () => {
     ws.onmessage = (e) => {
         const d = JSON.parse(e.data)
         if(d.type==='update'){ syncRunning.value=d.running; Object.assign(syncData, d.data); syncData.files=d.files }
-        else if(d.type==='log'){ if(currentView.value === 'logs') logContent.value += d.msg + '\n' }
+        else if(d.type==='log'){ 
+            if(currentView.value === 'logs') {
+                logContent.value += d.msg + '\n'
+                // [MODIFIED] Only scroll if not paused
+                nextTick(() => { 
+                    if (!autoScrollPaused.value) scrollToBottom() 
+                })
+            }
+        }
         else if(d.type==='refresh_space'){ fetchStatus(true); showMsg('Sync Finished'); fetchConfig() }
     }
     ws.onclose = () => setTimeout(connectWs, 2000)

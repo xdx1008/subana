@@ -30,6 +30,30 @@ DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
 
+# --- Custom Log Handler ---
+class OverwriteRotatingFileHandler(RotatingFileHandler):
+    """
+    Custom handler that deletes the log file and creates a new one 
+    when the size limit is reached, instead of keeping backups.
+    """
+    def doRollover(self):
+        """
+        Override the rollover logic.
+        """
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+        
+        # Force delete the current log file to reset it
+        if os.path.exists(self.baseFilename):
+            try:
+                os.remove(self.baseFilename)
+            except OSError:
+                pass # Handle potential file lock errors
+        
+        # Re-open the stream (creates a new empty file)
+        self.stream = self._open()
+
 # --- App State ---
 class AppState:
     def __init__(self):
@@ -83,9 +107,10 @@ def setup_logging(max_size_mb):
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # [MODIFIED] backupCount=0 代表不保留舊檔。
-    # 當檔案大小達到上限時，會直接清空並重新寫入 (Overwrite)，不會產生 app.log.1
-    file_handler = RotatingFileHandler(
+    # [MODIFIED] Use the custom OverwriteRotatingFileHandler
+    # maxBytes controls when doRollover is called.
+    # backupCount is irrelevant here as we overrode the logic, but 0 is safe.
+    file_handler = OverwriteRotatingFileHandler(
         LOG_FILE, 
         maxBytes=max_bytes, 
         backupCount=0, 
@@ -93,13 +118,11 @@ def setup_logging(max_size_mb):
     )
     file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%H:%M:%S'))
     
-    # [NEW] 強制刪除舊的備份檔 (app.log.1)
+    # Also clean up any legacy backup files (.1) if they exist
     backup_file = f"{LOG_FILE}.1"
     if os.path.exists(backup_file):
-        try:
-            os.remove(backup_file)
-        except:
-            pass
+        try: os.remove(backup_file)
+        except: pass
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%H:%M:%S'))

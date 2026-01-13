@@ -293,17 +293,57 @@
       
       <v-dialog v-model="fmDialog" width="auto" max-width="95vw" scrollable>
         <v-card color="#1E1E1E">
-            <v-card-title class="d-flex align-center text-subtitle-1 border-b border-grey-darken-3 bg-[#252525]">
-                <div class="d-flex align-center overflow-hidden mr-2">
+            <v-card-title class="d-flex flex-wrap align-center text-subtitle-1 border-b border-grey-darken-3 bg-[#252525] py-2">
+                <div class="d-flex align-center overflow-hidden mr-auto mb-2 mb-sm-0" style="min-width: 150px; max-width: 100%;">
                     <v-icon start color="primary">mdi-folder</v-icon> 
                     <span class="text-truncate">{{ selectedMedia?.name }}</span>
-                    <v-chip size="x-small" class="ml-2" color="grey-lighten-1" variant="flat">{{ fileList.length }} items</v-chip>
+                    <v-chip size="x-small" class="ml-2 flex-shrink-0" color="grey-lighten-1" variant="flat">{{ fileList.length }} items</v-chip>
                 </div>
-                <v-spacer></v-spacer>
-                <v-select v-model="currentFolder" :items="folderList" item-title="label" item-value="path" density="compact" variant="outlined" hide-details style="max-width: 300px" bg-color="#121212" @update:model-value="loadFiles"></v-select>
+                
+                <div class="d-flex align-center gap-2 flex-grow-1 flex-sm-grow-0 justify-end" style="width: 100%; sm:width: auto;">
+                    <v-text-field 
+                        v-model="fmSearch" 
+                        prepend-inner-icon="mdi-magnify" 
+                        label="Filter files..." 
+                        density="compact" 
+                        variant="outlined" 
+                        hide-details 
+                        bg-color="#121212" 
+                        class="flex-grow-1 flex-sm-grow-0"
+                        style="min-width: 150px; max-width: 200px;"
+                    ></v-text-field>
+                    
+                    <v-select 
+                        v-model="currentFolder" 
+                        :items="folderList" 
+                        item-title="label" 
+                        item-value="path" 
+                        density="compact" 
+                        variant="outlined" 
+                        hide-details 
+                        bg-color="#121212" 
+                        class="flex-grow-1 flex-sm-grow-0"
+                        style="min-width: 150px; max-width: 250px;" 
+                        @update:model-value="loadFiles"
+                    ></v-select>
+                </div>
             </v-card-title>
+
             <v-card-text class="pa-0" style="height: 500px;">
-                <v-data-table v-model="selectedFiles" show-select :headers="fmHeaders" :items="fileList" density="compact" item-value="name" class="bg-transparent" fixed-header height="100%" hover items-per-page="-1">
+                <v-data-table 
+                    v-model="selectedFiles" 
+                    show-select 
+                    :headers="fmHeaders" 
+                    :items="fileList" 
+                    :search="fmSearch"
+                    density="compact" 
+                    item-value="name" 
+                    class="bg-transparent" 
+                    fixed-header 
+                    height="100%" 
+                    hover 
+                    items-per-page="-1"
+                >
                     <template #item.name="{ item }"><span class="text-no-wrap">{{ getRaw(item).name }}</span></template>
                     <template #item.type="{ item }">
                         <div class="d-flex align-center justify-end">
@@ -428,6 +468,9 @@ const fmHeaders = [ { title: 'Name', key: 'name', align: 'start', sortable: true
 const getRaw = (item) => item && item.raw ? item.raw : item
 const fmDialog = ref(false); const detailsDialog = ref(false); const selectedMedia = ref(null); const detailData = ref(null); const folderList = ref([]); const currentFolder = ref(''); const fileList = ref([]); const selectedFiles = ref([]); const uploadFiles = ref([])
 
+// [NEW] Search variable for File Manager
+const fmSearch = ref('')
+
 // [MODIFIED] New state for Log Pause
 const autoScrollPaused = ref(false)
 let logPauseTimer = null
@@ -495,7 +538,22 @@ const openDetails = async (data) => {
         } catch(e) {} 
     } 
 }
-const openFileManager = async (data) => { if(data){ selectedMedia.value=data; try { const r = await axios.get(`api/media/${data.id}/folders`); folderList.value=r.data; if(folderList.value.length>0){ currentFolder.value=folderList.value[0].path; loadFiles() }; fmDialog.value=true } catch(e) {} } }
+const openFileManager = async (data) => { 
+    if(data){ 
+        selectedMedia.value=data; 
+        // [MODIFIED] Clear search when opening FM
+        fmSearch.value = ''; 
+        try { 
+            const r = await axios.get(`api/media/${data.id}/folders`); 
+            folderList.value=r.data; 
+            if(folderList.value.length>0){ 
+                currentFolder.value=folderList.value[0].path; 
+                loadFiles() 
+            }; 
+            fmDialog.value=true 
+        } catch(e) {} 
+    } 
+}
 const loadFiles = async () => { try { const r = await axios.get(`api/files?path=${encodeURIComponent(currentFolder.value)}`); fileList.value=r.data; selectedFiles.value=[] } catch(e){ fileList.value=[] } }
 const runDelete = async () => { if(confirm('Delete?')){ showMsg('Deleting...'); try { await axios.post('api/media/delete', {media_id:selectedMedia.value.id, folder_path:currentFolder.value, files:selectedFiles.value}); showMsg('Deleted'); loadFiles(); await loadMedia() } catch(e){ showMsg('Error') } } }
 const runRename = async () => { showMsg('Renaming...'); try { await axios.post('api/media/rename', {media_id:selectedMedia.value.id, folder_path:currentFolder.value}); showMsg('Renamed'); loadFiles(); await loadMedia() } catch(e){ showMsg('Error') } }

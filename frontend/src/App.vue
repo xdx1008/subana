@@ -305,7 +305,12 @@
             <v-card-text class="pa-0" style="height: 500px;">
                 <v-data-table v-model="selectedFiles" show-select :headers="fmHeaders" :items="fileList" density="compact" item-value="name" class="bg-transparent" fixed-header height="100%" hover items-per-page="-1">
                     <template #item.name="{ item }"><span class="text-no-wrap">{{ getRaw(item).name }}</span></template>
-                    <template #item.type="{ item }"><span class="text-caption text-grey text-no-wrap">{{ getRaw(item).type }}</span></template>
+                    <template #item.type="{ item }">
+                        <div class="d-flex align-center justify-end">
+                            <v-chip v-if="getRaw(item).is_multi" size="x-small" color="orange" variant="outlined" class="mr-2" style="height: 18px; font-size: 10px;">Multi</v-chip>
+                            <span class="text-caption text-grey text-no-wrap">{{ getRaw(item).type }}</span>
+                        </div>
+                    </template>
                     <template #bottom></template>
                 </v-data-table>
             </v-card-text>

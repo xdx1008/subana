@@ -20,7 +20,7 @@ from logic import (
     RcloneHandler, run_library_scan, 
     run_single_refresh, get_media_folders, list_folder_files,
     execute_file_deletion, execute_folder_rename, execute_directory_purge,
-    execute_folder_upload, get_season_episode_key
+    execute_folder_upload, get_season_episode_key, get_cloud_drives
 )
 from database import get_all_media, get_media_by_id, get_subtitles, clear_db
 
@@ -133,7 +133,6 @@ async def perform_library_scan(target=None):
         logger.info(f"🚀 Library Scan Started (Target: {target_path})")
         await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], target_path)
         
-        # Only update timestamp if full scan (no specific target or target is root)
         if target_path == cfg['path']:
             cfg = load_config()
             cfg['last_scan_time'] = time.time()
@@ -277,12 +276,17 @@ async def get_logs():
             lines = deque(f, maxlen=1000); return {"logs": list(lines)}
     except Exception as e: return {"logs": [f"Error reading logs: {e}"]}
 
-# [MODIFIED] Added target parameter for specific scans
 @app.post("/api/scan")
 async def trigger_scan(background_tasks: BackgroundTasks, target: Optional[str] = None):
     if state.scan_running: return {"status": "running"}
     background_tasks.add_task(perform_library_scan, target)
     return {"status": "started", "target": target or "Full"}
+
+@app.get("/api/drives")
+async def get_drives_list():
+    cfg = load_config()
+    drives = await asyncio.to_thread(get_cloud_drives, cfg['url'], cfg['token'], cfg['path'])
+    return drives
 
 @app.get("/api/media")
 async def list_media():

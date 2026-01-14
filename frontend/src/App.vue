@@ -355,14 +355,16 @@
                 </v-data-table>
             </v-card-text>
             <v-divider></v-divider>
-            <v-card-actions class="bg-[#252525]">
+            
+            <v-card-actions class="bg-[#252525] d-flex flex-wrap align-center justify-end ga-2 pa-3">
                 <v-file-input ref="fileInput" v-model="uploadFiles" multiple hide-input style="display:none" @update:modelValue="uploadSubtitles"></v-file-input>
-                <v-btn color="blue" prepend-icon="mdi-upload" variant="text" @click="$refs.fileInput.click()">Upload Subs</v-btn>
-                <v-spacer></v-spacer>
-                <v-btn color="warning" variant="text" @click="runRename">Align Names</v-btn>
-                <v-btn color="error" variant="text" @click="runDelete" :disabled="selectedFiles.length === 0">Delete {{ selectedFiles.length > 0 ? `(${selectedFiles.length})` : '' }}</v-btn>
-                <v-btn color="red" variant="tonal" @click="runPurge">Purge Folder</v-btn>
-                <v-btn @click="fmDialog = false">Close</v-btn>
+                
+                <v-btn color="blue" prepend-icon="mdi-upload" variant="text" @click="$refs.fileInput.click()" class="mr-auto">Upload Subs</v-btn>
+                
+                <v-btn color="warning" variant="text" prepend-icon="mdi-format-list-checks" @click="runRename">Align Names</v-btn>
+                <v-btn color="error" variant="text" prepend-icon="mdi-delete" @click="runDelete" :disabled="selectedFiles.length === 0">Delete {{ selectedFiles.length > 0 ? `(${selectedFiles.length})` : '' }}</v-btn>
+                <v-btn color="red" variant="tonal" prepend-icon="mdi-folder-remove" @click="runPurge">Purge Folder</v-btn>
+                <v-btn variant="plain" prepend-icon="mdi-close" @click="fmDialog = false">Close</v-btn>
             </v-card-actions>
         </v-card>
       </v-dialog>

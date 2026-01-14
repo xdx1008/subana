@@ -536,15 +536,9 @@ const startScan = async () => {
     try { 
         let target = null;
         if (scanTarget.value !== "All") {
-            // Find full path from config.path + target name
-            // Actually, server expects full path like /Cloud/DriveA or just /Cloud
-            // We need to construct it. 
-            // The dropdown only has names.
-            // Let's assume config.path is the root.
             const root = config.value.path || "/Cloud";
             target = `${root}/${scanTarget.value}`.replace('//', '/');
         } else {
-            // "All" -> send root path
             target = config.value.path || "/Cloud";
         }
         
@@ -624,76 +618,19 @@ const connectWs = () => {
 // [NEW] Fetch Drives for Dropdown
 const fetchDrives = async () => {
     try {
-        // Use configured path or default /Cloud
-        const rootPath = config.value.path || "/Cloud";
-        const r = await axios.get(`api/files?path=${encodeURIComponent(rootPath)}`);
-        // Filter only directories
-        const drives = r.data
-            .filter(f => f.type === '📄 Other') // Since API marks non-video as Other, need to check logic.py. Actually list_folder_files marks based on extension.
-            // Wait, logic.py list_folder_files excludes is_dir! 
-            // We need a way to list drives (directories).
-            // Logic.py's list_folder_files:
-            // "if f['is_dir']: continue" -> It SKIPS directories.
-            // This endpoint is for File Manager.
-            // We need a different way or update logic.py to allow listing dirs.
-            // But we can't easily change backend just for this dropdown without affecting FM.
-            
-            // Actually, logic.py has `get_media_folders` for specific media.
-            // And `list_folder_files` for file list.
-            
-            // Let's modify logic.py to include dirs if we ask for it? 
-            // Or just trust the user will type it? No, dropdown is requested.
-            
-            // Workaround: The previous `list_files` in logic.py implementation of `list_folder_files` explicitly skips dirs.
-            // I should have updated `logic.py` to support this.
-            // BUT, since I cannot edit logic.py in this turn (I already submitted it), 
-            // I will assume for now "All" is the primary use case, or I will use a known behavior.
-            
-            // ACTUALLY, I can edit logic.py again if I want to be perfect.
-            // But the prompt was about frontend App.vue adjustments.
-            
-            // Let's check if there is another endpoint. `get_media_dirs` is for specific media.
-            
-            // To properly implement the "Drive Selector", we need an endpoint that lists directories.
-            // Since I cannot change backend in *this specific* file block response (I'm outputting App.vue),
-            // I will implement a "best effort" here:
-            // For now, I will hardcode ["All"] and maybe try to fetch if possible, but standard behavior suggests 
-            // I should have added a backend endpoint.
-            
-            // Wait, I *did* modify logic.py in the PREVIOUS turn. 
-            // Did I add a directory lister? No.
-            
-            // Let's assume for this specific step, we populate with "All". 
-            // If the user really wants the dropdown to work dynamically, 
-            // I would need to modify `list_folder_files` in `logic.py` to optionally include directories 
-            // or add a `list_drives` endpoint.
-            
-            // Given the constraints, I will leave it as "All" for now, 
-            // but the UI element is there.
-            // If I could, I'd add `api/drives` endpoint.
-            
-            // However, the user asked "在Media library header新增按鈕能讓我指定要強制重新掃描哪個"XX""
-            // This implies I should have a way to list them.
-            // I'll add a comment in the FetchDrives function.
-            
-            return ["All"]; 
+        const r = await axios.get('api/drives');
+        if (Array.isArray(r.data)) {
+            scanOptions.value = ["All", ...r.data];
+        } else {
+            scanOptions.value = ["All"];
+        }
     } catch (e) {
-        return ["All"];
+        scanOptions.value = ["All"];
     }
 }
 
-// [MODIFIED] Fetch drives when config loads
 watch(() => config.value.path, async (newPath) => {
-    if (newPath) {
-        // Here we would ideally fetch subfolders. 
-        // For now, just reset to All.
-        scanOptions.value = ["All"];
-        
-        // Attempt to fetch if backend supported it. 
-        // Since backend `list_folder_files` filters out dirs, we can't use it.
-        // We'd need to modify `logic.py`'s `list_folder_files` to accept `include_dirs=True`.
-        // I will assume for this turn I only provide the UI.
-    }
+    if (newPath) fetchDrives();
 });
 
 watch(() => status.scan.running, (newVal, oldVal) => {
@@ -723,15 +660,11 @@ onMounted(() => {
     }
 
     fetchConfig(); 
+    fetchDrives(); // Initial fetch
     fetchStatus(); 
     loadMedia(); 
     connectWs(); 
     if (currentView.value === 'logs') startLogPolling();
-    
-    // [NEW] Attempt to fetch drives (mock for now as backend update needed for dir listing)
-    // Ideally: const drives = await axios.get('/api/drives'); scanOptions.value = ["All", ...drives.data];
-    // Current backend doesn't list folders for root. 
-    // We will stick with "All" to prevent breaking.
     
     statusPoller = setInterval(() => {
         fetchStatus();

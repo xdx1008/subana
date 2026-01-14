@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from typing import List, Optional, Any, Dict
 from contextlib import asynccontextmanager
 
-# [MODIFIED] Added get_season_episode_key to imports
 from logic import (
     RcloneHandler, run_library_scan, 
     run_single_refresh, get_media_folders, list_folder_files,
@@ -124,17 +123,22 @@ def get_sync_info_str(cfg):
     return last_str, next_str
 
 # --- Shared Logic Functions ---
-async def perform_library_scan():
+async def perform_library_scan(target=None):
     global state
     if state.scan_running: return
     state.scan_running = True
     cfg = load_config()
+    target_path = target if target else cfg['path']
     try:
-        logger.info("🚀 Library Scan Started")
-        await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], cfg['path'])
-        cfg = load_config()
-        cfg['last_scan_time'] = time.time()
-        save_config(cfg)
+        logger.info(f"🚀 Library Scan Started (Target: {target_path})")
+        await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], target_path)
+        
+        # Only update timestamp if full scan (no specific target or target is root)
+        if target_path == cfg['path']:
+            cfg = load_config()
+            cfg['last_scan_time'] = time.time()
+            save_config(cfg)
+            
         logger.info("🏁 Library Scan Finished")
     except Exception as e: logger.error(f"Scan Error: {e}")
     finally: state.scan_running = False
@@ -273,11 +277,12 @@ async def get_logs():
             lines = deque(f, maxlen=1000); return {"logs": list(lines)}
     except Exception as e: return {"logs": [f"Error reading logs: {e}"]}
 
+# [MODIFIED] Added target parameter for specific scans
 @app.post("/api/scan")
-async def trigger_scan(background_tasks: BackgroundTasks):
+async def trigger_scan(background_tasks: BackgroundTasks, target: Optional[str] = None):
     if state.scan_running: return {"status": "running"}
-    background_tasks.add_task(perform_library_scan)
-    return {"status": "started"}
+    background_tasks.add_task(perform_library_scan, target)
+    return {"status": "started", "target": target or "Full"}
 
 @app.get("/api/media")
 async def list_media():
@@ -290,21 +295,16 @@ async def list_media():
             try:
                 if r['all_subs']:
                     subs_data = json.loads(r['all_subs'])
-                    # [MODIFIED] Multi detection logic for Movie and TV
                     if r['type'] == 'movie':
-                        # Movie logic: If more than 1 file in the movie folder
                         if len(json.loads(subs_data[0]['subs'])) > 1: is_multi = True
                     elif r['type'] == 'tv':
-                        # TV logic: Check for duplicate SxxExx keys
                         for season in subs_data:
                             eps = json.loads(season['subs'])
                             seen_keys = set()
                             for ep in eps:
                                 k = get_season_episode_key(ep['name'])
                                 if k:
-                                    if k in seen_keys:
-                                        is_multi = True
-                                        break
+                                    if k in seen_keys: is_multi = True; break
                                     seen_keys.add(k)
                             if is_multi: break
             except: pass

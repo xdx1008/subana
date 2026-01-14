@@ -8,7 +8,7 @@ import re
 import urllib.parse
 import tempfile
 import time
-from collections import Counter # [NEW]
+from collections import Counter
 from database import save_media, get_media_by_id, delete_season_data, get_media_by_path, get_all_media, get_db_connection
 
 # 設定 Log
@@ -43,9 +43,12 @@ class AlistClient:
         except: return None
 
     def list_files(self, path, refresh=False):
+        # [MODIFIED] Return None on failure to distinguish from empty folder
         data = self._request('post', 'list', {"path": path, "page": 1, "per_page": 0, "refresh": refresh})
-        if data and data.get('code') == 200: return data['data']['content']
-        return []
+        if data and data.get('code') == 200: 
+            content = data['data']['content']
+            return content if content is not None else []
+        return None
 
     def get_raw_url(self, path):
         data = self._request('post', 'get', {"path": path})
@@ -490,13 +493,15 @@ def process_movie_item(client, drive_id, m_name, m_full_path, force=False):
             except: pass
 
     files = client.list_files(m_full_path)
-    if not files: return False
-    
+    if files is None: 
+        logging.error(f"❌ Failed to list files for {m_full_path}")
+        return False, False # (Exists, Success) -> (False, False)
+        
     episodes = process_folder_videos(client, m_full_path, files, existing_eps)
     if episodes:
         save_media('movie', drive_id, m_name, m_full_path, [{'season': 'Movie', 'subs': json.dumps(episodes)}])
-        return True
-    return False
+        return True, True # Exists, Success
+    return False, True # Not Exists (empty), Success
 
 def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
     logging.info("=" * 60)
@@ -511,9 +516,14 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
         except: pass
     
     seasons = client.list_files(t_full_path, refresh=force)
-    if not seasons: return False
+    if seasons is None:
+        logging.error(f"❌ Failed to list seasons for {t_full_path}")
+        return False, False # Error
+        
+    if not seasons: return False, True # Empty but success
     
     final_data = []
+    
     for s in seasons:
         if not s['is_dir']: continue
         s_name = s['name']
@@ -534,8 +544,8 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
 
     if final_data:
         save_media('tv', drive_id, t_name, t_full_path, final_data)
-        return True
-    return False
+        return True, True
+    return False, True
 
 def get_media_folders(alist_url, token, media_id):
     client = AlistClient(alist_url, token)
@@ -557,7 +567,6 @@ def list_folder_files(alist_url, token, folder_path):
     files = client.list_files(folder_path, refresh=True) 
     if not files: return []
     
-    # [MODIFIED] Calculate duplicate episodes (is_multi)
     ep_key_counts = Counter()
     for f in files:
         if not f['is_dir'] and f['name'].lower().endswith(VIDEO_EXTS):
@@ -666,44 +675,119 @@ def import_subs_to_target(alist_url, token, source_folder, target_folder):
         return "Done", []
     return "Failed", []
 
-def run_library_scan(alist_url, token, start_cloud_path="/Cloud"):
+# [MODIFIED] run_library_scan now accepts target_path and includes safeguards
+def run_library_scan(alist_url, token, target_path="/Cloud"):
     client = AlistClient(alist_url, token)
     logging.info("="*40)
-    logging.info(f"🚀 Full Scan Started: {start_cloud_path}")
+    logging.info(f"🚀 Scan Started. Target: {target_path}")
+    
     all_media = get_all_media("All", "")
     db_paths = {row['full_path']: row['id'] for row in all_media}
     found_paths = set()
-    drives = client.list_files(start_cloud_path)
-    if drives:
-        drive_list = sorted([d for d in drives if d['is_dir']], key=lambda x: x['name'])
-        for drive in drive_list:
-            drive_id = drive['name']; drive_full_path = posixpath.join(start_cloud_path, drive_id)
-            logging.info(f"👉 Drive: {drive_id}")
-            sub_folders = client.list_files(drive_full_path)
-            if not sub_folders: continue
-            folder_map = {item['name'].lower(): item['name'] for item in sub_folders if item['is_dir']}
-            if 'movies' in folder_map:
-                m_path = posixpath.join(drive_full_path, folder_map['movies']); m_list = client.list_files(m_path)
-                if m_list:
-                    for m in m_list:
-                        if not m['is_dir']: continue
-                        full = posixpath.join(m_path, m['name'])
-                        if process_movie_item(client, drive_id, m['name'], full, force=False): found_paths.add(full)
-            if 'tv' in folder_map:
-                t_path = posixpath.join(drive_full_path, folder_map['tv']); t_list = client.list_files(t_path)
-                if t_list:
-                    for t in t_list:
-                        if not t['is_dir']: continue
-                        full = posixpath.join(t_path, t['name'])
-                        if process_tv_item(client, drive_id, t['name'], full, force=False): found_paths.add(full)
+    
+    # Scanned Scopes: Paths that were successfully listed.
+    # We only delete items if they fall under a successfully scanned scope.
+    scanned_scopes = set()
+
+    def scan_drive(drive_path, drive_id):
+        # drive_path e.g. /Cloud/DriveA
+        logging.info(f"👉 Scanning Drive: {drive_path}")
+        sub_folders = client.list_files(drive_path)
+        
+        if sub_folders is None:
+            logging.error(f"❌ Failed to list drive: {drive_path}. Skipping cleanup for this drive.")
+            return False # Failed
+            
+        scanned_scopes.add(drive_path) # Mark this drive as successfully listed
+        
+        folder_map = {item['name'].lower(): item['name'] for item in sub_folders if item['is_dir']}
+        
+        # Movies
+        if 'movies' in folder_map:
+            m_path = posixpath.join(drive_path, folder_map['movies'])
+            m_list = client.list_files(m_path)
+            if m_list is not None:
+                scanned_scopes.add(m_path)
+                for m in m_list:
+                    if not m['is_dir']: continue
+                    full = posixpath.join(m_path, m['name'])
+                    exists, success = process_movie_item(client, drive_id, m['name'], full, force=False)
+                    if success and exists: found_paths.add(full)
+            else:
+                logging.error(f"❌ Failed to list movies folder: {m_path}")
+
+        # TV
+        if 'tv' in folder_map:
+            t_path = posixpath.join(drive_path, folder_map['tv'])
+            t_list = client.list_files(t_path)
+            if t_list is not None:
+                scanned_scopes.add(t_path)
+                for t in t_list:
+                    if not t['is_dir']: continue
+                    full = posixpath.join(t_path, t['name'])
+                    exists, success = process_tv_item(client, drive_id, t['name'], full, force=False)
+                    if success and exists: found_paths.add(full)
+            else:
+                logging.error(f"❌ Failed to list TV folder: {t_path}")
+        
+        return True
+
+    # Check if target is Root or specific Drive
+    # We assume drives are direct children of /Cloud (or whatever start_cloud_path is in config, usually /Cloud)
+    # If target_path is /Cloud, we list it to get drives.
+    # If target_path is /Cloud/DriveA, we treat DriveA as the drive.
+    
+    # Simple logic: If target ends with /Cloud, treat as root. Else treat as specific drive.
+    # But user might configure path=/MyData. 
+    # Let's check config path.
+    root_path = "/Cloud"
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE) as f: root_path = json.load(f).get('path', '/Cloud')
+    except: pass
+    
+    # Normalize paths
+    target_path = target_path.rstrip('/')
+    root_path = root_path.rstrip('/')
+    
+    if target_path == root_path:
+        # Scanning Root
+        drives = client.list_files(root_path)
+        if drives is None:
+            logging.error(f"❌ [Safeguard] Failed to list root {root_path}. Aborting scan.")
+            return # Abort entire scan, delete nothing
+        
+        for d in drives:
+            if d['is_dir']:
+                scan_drive(posixpath.join(root_path, d['name']), d['name'])
+    else:
+        # Scanning Specific Target (Assuming it's a Drive folder)
+        # drive_id is the basename of target_path
+        drive_id = os.path.basename(target_path)
+        scan_drive(target_path, drive_id)
+
+    # Cleanup Logic with Safeguard
     with get_db_connection() as conn:
         deleted_count = 0
         for path, mid in db_paths.items():
-            if path not in found_paths:
-                logging.info(f"🗑️ [CLEANUP] Removing missing media: {path}")
-                conn.execute("DELETE FROM media WHERE id = ?", (mid,))
-                deleted_count += 1
-        if deleted_count > 0: logging.info(f"🧹 Cleanup finished: Removed {deleted_count} items.")
+            # Only delete if the path belongs to a scope that was successfully scanned
+            # Check if path starts with any path in scanned_scopes
+            in_scope = False
+            for scope in scanned_scopes:
+                if path.startswith(scope):
+                    in_scope = True
+                    break
+            
+            if in_scope:
+                if path not in found_paths:
+                    logging.info(f"🗑️ [CLEANUP] Removing missing media: {path}")
+                    conn.execute("DELETE FROM media WHERE id = ?", (mid,))
+                    deleted_count += 1
+            # If not in_scope, we do nothing (preserve it)
+            
+        if deleted_count > 0:
+            logging.info(f"🧹 Cleanup finished: Removed {deleted_count} items.")
+
     logging.info("🏁 Scan Finished!")
 
 def run_single_refresh(alist_url, token, media_id):
@@ -711,10 +795,17 @@ def run_single_refresh(alist_url, token, media_id):
     row = get_media_by_id(media_id)
     if not row: return
     logging.info(f"🔄 Manual Refresh: {row['name']}")
-    exists = False
-    if row['type'] == 'movie': exists = process_movie_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
-    elif row['type'] == 'tv': exists = process_tv_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
-    if not exists:
+    exists, success = False, False
+    if row['type'] == 'movie': 
+        exists, success = process_movie_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
+    elif row['type'] == 'tv': 
+        exists, success = process_tv_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
+    
+    # Only delete if scan was successful AND item no longer exists
+    if success and not exists:
         logging.info(f"🗑️ [CLEANUP] Media became empty/invalid, removing: {row['name']}")
         with get_db_connection() as conn: conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
+    elif not success:
+        logging.error(f"❌ Refresh failed for {row['name']} due to API error.")
+        
     logging.info(f"🏁 Refresh Done: {row['name']}")

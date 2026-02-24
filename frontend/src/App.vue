@@ -13,14 +13,13 @@
     >
       <v-list-item class="px-2 py-4">
         <div v-if="!rail || mobile" class="text-center fade-transition d-flex flex-column align-center">
-             <img v-if="config.site_icon" :src="config.site_icon" style="max-height: 50px; max-width: 100%; border-radius: 4px;" class="mb-2" />
+             <v-icon color="primary" size="x-large" class="mb-2">mdi-cloud-sync</v-icon>
              <div class="text-h6 font-weight-black text-grey-lighten-2 text-wrap" style="line-height: 1.2;">
-                 {{ config.site_name || 'SUBANA MGR' }}
+                 SUBANA MGR
              </div>
         </div>
         <div v-else class="text-center">
-            <img v-if="config.site_icon" :src="config.site_icon" style="max-height: 32px; max-width: 32px; border-radius: 4px;" />
-            <v-icon v-else color="primary" size="large">mdi-cloud-sync</v-icon>
+            <v-icon color="primary" size="large">mdi-cloud-sync</v-icon>
         </div>
       </v-list-item>
 
@@ -236,19 +235,6 @@
                 <v-app-bar-nav-icon v-if="mobile" variant="text" @click.stop="drawer = !drawer" class="mr-2"></v-app-bar-nav-icon>
                 <div class="text-h6">Settings</div>
            </div>
-           
-           <v-card color="#1E1E1E" title="Appearance" class="mb-4" border>
-              <v-card-text>
-                  <v-row align="center">
-                      <v-col cols="12" md="6">
-                          <v-text-field v-model="config.site_name" label="Site Name" variant="outlined" density="compact" bg-color="#222"></v-text-field>
-                      </v-col>
-                      <v-col cols="12" md="6">
-                          <v-text-field v-model="config.site_icon" label="Site Icon URL (e.g. https://...)" variant="outlined" density="compact" bg-color="#222" prepend-inner-icon="mdi-link" hint="Enter a direct link to an image file" persistent-hint></v-text-field>
-                      </v-col>
-                  </v-row>
-              </v-card-text>
-           </v-card>
            
            <v-card color="#1E1E1E" title="System Logs" class="mb-4" border>
               <v-card-text>
@@ -666,20 +652,6 @@ watch(() => status.scan.running, (newVal, oldVal) => {
         loadMedia();
     }
 });
-
-watch(() => config.value.site_name, (newVal) => {
-    document.title = newVal || 'Subana Manager';
-}, { immediate: true });
-
-watch(() => config.value.site_icon, (newVal) => {
-    let link = document.querySelector("link[rel~='icon']");
-    if (!link) {
-        link = document.createElement('link');
-        link.rel = 'icon';
-        document.head.appendChild(link);
-    }
-    link.href = newVal || '/favicon.ico';
-}, { immediate: true });
 
 onMounted(() => { 
     if (mobile.value) {

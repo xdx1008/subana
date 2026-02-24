@@ -19,8 +19,8 @@ from logic import (
     RcloneHandler, run_library_scan, 
     run_single_refresh, get_media_folders, list_folder_files,
     execute_file_deletion, execute_folder_rename, execute_directory_purge,
-    execute_folder_upload, get_season_episode_key, get_cloud_drives
-    generate_strm_files  # <-- 新增這裡
+    execute_folder_upload, get_season_episode_key, get_cloud_drives,
+    sync_all_strm
 )
 from database import get_all_media, get_media_by_id, get_subtitles, clear_db
 # Constants
@@ -63,7 +63,11 @@ def load_config():
         "rclone_conf": "/root/.config/rclone/rclone.conf",
         "site_name": "SUBANA MGR",
         "site_icon": "",
-        "log_max_size": 2
+        "log_max_size": 2,
+        "strm_path": "/Cloud/strm",
+        "strm_auto_sync": False,
+        "strm_sync_interval": 1440,
+        "last_strm_sync": 0
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -128,9 +132,12 @@ async def perform_library_scan(target=None):
     state.scan_running = True
     cfg = load_config()
     target_path = target if target else cfg['path']
+    strm_path = cfg.get('strm_path') # 直接在這裡讀取設定
+    
     try:
         logger.info(f"🚀 Library Scan Started (Target: {target_path})")
-        await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], target_path)
+        # 傳入 strm_path
+        await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], target_path, strm_path)
         
         if target_path == cfg['path']:
             cfg = load_config()
@@ -194,6 +201,18 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(background_scheduler())
     yield
 
+async def perform_strm_sync():
+    cfg = load_config()
+    strm_path = cfg.get('strm_path')
+    if not strm_path: return
+    try:
+        await asyncio.to_thread(sync_all_strm, cfg['url'], cfg['token'], strm_path)
+        cfg = load_config()
+        cfg['last_strm_sync'] = time.time()
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"STRM Auto-Sync Error: {e}")
+
 async def background_scheduler():
     logger.info("⏳ Scheduler Started")
     while True:
@@ -213,6 +232,14 @@ async def background_scheduler():
                 if sync_int_sec > 0 and (now - last_sync > sync_int_sec or last_sync == 0):
                     logger.info("⏰ Scheduler: Triggering Auto Sync")
                     asyncio.create_task(perform_rclone_sync())
+            if cfg.get('strm_auto_sync', False) and not state.scan_running:
+                strm_int_sec = int(cfg.get('strm_sync_interval', 1440)) * 60
+                last_strm = cfg.get('last_strm_sync', 0)
+                if strm_int_sec > 0 and (now - last_strm > strm_int_sec or last_strm == 0):
+                    logger.info("⏰ Scheduler: Triggering Auto STRM Sync")
+                    cfg['last_strm_sync'] = now
+                    save_config(cfg)
+                    asyncio.create_task(perform_strm_sync())
         except Exception as e: logger.error(f"Scheduler Error: {e}")
 
 app = FastAPI(lifespan=lifespan)
@@ -224,6 +251,7 @@ class ConfigModel(BaseModel):
     interval: int = 3600; last_free: str = "Unknown"; last_total: str = "Unknown"; sync_interval: int = 60
     last_scan_time: float = 0; last_sync_ts: float = 0; rclone_conf: str = "/root/.config/rclone/rclone.conf"
     site_name: str = "SUBANA MGR"; site_icon: str = ""; log_max_size: int = 2
+    strm_path: str = "/Cloud/strm"; strm_auto_sync: bool = False; strm_sync_interval: int = 1440; last_strm_sync: float = 0
 
 class DeleteFileModel(BaseModel):
     media_id: int; folder_path: str; files: List[str]
@@ -278,23 +306,17 @@ async def get_logs():
 @app.post("/api/scan")
 async def trigger_scan(background_tasks: BackgroundTasks, target: Optional[str] = None):
     if state.scan_running: return {"status": "running"}
-    background_tasks.add_task(perform_library_scan, target)
+    background_tasks.add_task(perform_library_scan, target, cfg.get('strm_path'))
     return {"status": "started", "target": target or "Full"}
 
 @app.post("/api/strm/generate")
 async def api_generate_strm():
-    import posixpath
     cfg = load_config()
     try:
-        # 讀取您設定的 Cloud Root Path (例如 /Cloud)，並將 strm 存在其底下
-        target_alist_path = posixpath.join(cfg.get('path', '/Cloud'), 'strm')
-        
-        count = await asyncio.to_thread(generate_strm_files, cfg['url'], cfg['token'], target_alist_path)
-        return {"status": "ok", "count": count, "path": target_alist_path}
-    except Exception as e:
-        logger.error(f"STRM Generation Error: {e}")
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        target_path = cfg.get('strm_path', '/Cloud/strm')
+        count = await asyncio.to_thread(sync_all_strm, cfg['url'], cfg['token'], target_path)
+        return {"status": "ok", "count": count, "path": target_path}
+    except Exception as e: return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/drives")
 async def get_drives_list():
@@ -346,15 +368,20 @@ async def get_media_detail(mid: int):
 
 @app.post("/api/media/{mid}/refresh")
 async def refresh_media(mid: int):
-    logger.info(f"🔄 Refreshing media item {mid}...")
     cfg = load_config()
-    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], mid)
+    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], mid, cfg.get('strm_path'))
     return {"status": "ok"}
 
 @app.post("/api/media/clear")
 async def clear_database():
-    logger.info("🗑️ Clearing database...")
+    cfg = load_config()
     await asyncio.to_thread(clear_db)
+    strm_path = cfg.get('strm_path')
+    if strm_path:
+        from logic import AlistClient
+        client = AlistClient(cfg['url'], cfg['token'])
+        client.remove_files(strm_path, ['movies', 'tv'])
+        logger.info("🗑️ [STRM] 資料庫已清空，同步刪除整個 STRM 目錄庫")
     return {"status": "cleared"}
 
 @app.get("/api/media/{mid}/folders")
@@ -372,20 +399,21 @@ async def get_files(path: str):
 async def delete_files(data: DeleteFileModel):
     cfg = load_config()
     logs = await asyncio.to_thread(execute_file_deletion, cfg['url'], cfg['token'], data.folder_path, data.files, cfg['path'])
-    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], data.media_id)
+    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], data.media_id, cfg.get('strm_path'))
     return {"logs": logs}
 
 @app.post("/api/media/rename")
 async def rename_files(data: RenameModel):
     cfg = load_config()
     logs = await asyncio.to_thread(execute_folder_rename, cfg['url'], cfg['token'], data.folder_path)
-    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], data.media_id)
+    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], data.media_id, cfg.get('strm_path'))
     return {"logs": logs}
 
 @app.post("/api/media/purge")
 async def purge_directory(data: PurgeModel):
     cfg = load_config()
     logs = await asyncio.to_thread(execute_directory_purge, cfg['url'], cfg['token'], data.folder_path, data.media_id, data.season_key, cfg['path'])
+    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], data.media_id, cfg.get('strm_path'))
     return {"logs": logs}
 
 @app.post("/api/media/upload")
@@ -395,7 +423,7 @@ async def upload_files(media_id: int = Form(...), folder_path: str = Form(...), 
     files_data = {}
     for file in files: content = await file.read(); files_data[file.filename] = content
     logs = await asyncio.to_thread(execute_folder_upload, cfg['url'], cfg['token'], folder_path, files_data)
-    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], media_id)
+    await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], media_id, cfg.get('strm_path'))
     return {"logs": logs}
 
 @app.post("/api/sync/stop")

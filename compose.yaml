@@ -1,27 +1,14 @@
 services:
   subana:
     build: .
-    container_name: subana
-    restart: unless-stopped
+    container_name: subana-test
+    restart: always
     ports:
       - "8501:8080"
     volumes:
-      - /Users/xiao/Web/subana:/app/data
-      - /Volumes/Drive/data/media:/media
+      - ./app/data
+      - ./app/rclone
+      - ./media
     environment:
-      - TZ=Asia/Taipei
+      - TZ=Asia/Taipei # 設定時區，讓日誌時間正
       - PYTHONUNBUFFERED=1
-  
-  # jellyfin:
-  #   image: jellyfin/jellyfin:latest
-  #   container_name: jellyfin
-  #   user: 501:20
-  #   ports:
-  #     - 8096:8096
-  #   volumes:
-  #     - /Users/xiao/Web/jellyfin/config:/config
-  #     - /Users/xiao/Web/jellyfin/cache:/cache
-  #     - /Volumes/Drive/data/media:/data/media
-  #   restart: 'always'
-  #   extra_hosts:
-  #     - 'host.docker.internal:host-gateway'

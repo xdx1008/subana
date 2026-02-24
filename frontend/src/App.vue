@@ -77,51 +77,61 @@
 
     <v-main class="fill-height overflow-hidden" id="main-content">
       <div v-if="currentView === 'media'" class="d-flex flex-column h-100 w-100 overflow-hidden">
-        <div class="px-4 py-2 bg-[#1E1E1E] border-b border-grey-darken-3 d-flex align-center gap-2 flex-shrink-0">
-             <v-app-bar-nav-icon v-if="mobile" variant="text" @click.stop="drawer = !drawer"></v-app-bar-nav-icon>
+        
+        <div class="px-4 py-2 bg-[#1E1E1E] border-b border-grey-darken-3 d-flex flex-column flex-sm-row align-start align-sm-center gap-2 flex-shrink-0">
              
-             <v-text-field 
-                v-model="search" 
-                prepend-inner-icon="mdi-magnify" 
-                label="Search..." 
-                density="compact" 
-                variant="outlined" 
-                hide-details 
-                class="mono-font flex-grow-1" 
-                :style="mobile ? '' : 'max-width: 300px'"
-                bg-color="#121212"
-             ></v-text-field>
+             <div class="d-flex align-center w-100" :style="mobile ? '' : 'max-width: auto; flex: 1;'">
+                 <v-app-bar-nav-icon v-if="mobile" variant="text" @click.stop="drawer = !drawer"></v-app-bar-nav-icon>
+                 
+                 <v-text-field 
+                    v-model="search" 
+                    prepend-inner-icon="mdi-magnify" 
+                    label="Search..." 
+                    density="compact" 
+                    variant="outlined" 
+                    hide-details 
+                    class="mono-font flex-grow-1" 
+                    :style="mobile ? '' : 'max-width: 300px'"
+                    bg-color="#121212"
+                 ></v-text-field>
 
-             <v-spacer class="hidden-sm-and-down"></v-spacer>
+                 <v-select
+                    v-model="scanTarget"
+                    :items="scanOptions"
+                    label="Scan Target"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    bg-color="#121212"
+                    style="max-width: 150px;"
+                    class="ml-2 hidden-xs"
+                 ></v-select>
 
-             <v-select
-                v-model="scanTarget"
-                :items="scanOptions"
-                label="Scan Target"
-                density="compact"
-                variant="outlined"
-                hide-details
-                bg-color="#121212"
-                style="max-width: 150px;"
-                class="mr-2 hidden-xs"
-             ></v-select>
+                 <v-spacer class="hidden-sm-and-down"></v-spacer>
+             </div>
 
-             <v-btn color="error" variant="text" size="small" @click="clearDB" style="min-width: 0;">
-                 <v-icon start>mdi-delete-sweep</v-icon>
-                 <span class="d-none d-sm-inline">Clear DB</span>
-             </v-btn>
+             <div class="d-flex flex-wrap align-center justify-end w-100 w-sm-auto mt-1 mt-sm-0" style="gap: 8px;">
+                 <v-btn color="error" variant="text" size="small" @click="clearDB" style="min-width: 0; padding: 0 8px;">
+                     <v-icon>mdi-delete-sweep</v-icon>
+                     <span class="d-none d-sm-inline ml-1">Clear DB</span>
+                 </v-btn>
+                 
+                 <v-divider vertical class="mx-1 d-none d-sm-block"></v-divider>
+                 
+                 <v-btn color="info" variant="text" size="small" @click="generateStrm" style="min-width: 0; padding: 0 8px;">
+                     <v-icon>mdi-file-video</v-icon>
+                     <span class="d-none d-sm-inline ml-1">Gen STRM</span>
+                 </v-btn>
 
-             <v-btn color="info" variant="text" size="small" @click="generateStrm" style="min-width: 0;">
-                 <v-icon start>mdi-file-video</v-icon>
-                 <span class="d-none d-sm-inline">Gen STRM</span>
-             </v-btn>
+                 <v-divider vertical class="mx-1 d-none d-sm-block"></v-divider>
 
-             <v-divider vertical class="mx-2"></v-divider>
-             <v-btn color="primary" :loading="status.scan.running" @click="startScan" variant="tonal" style="min-width: 0;">
-                 <v-icon start>mdi-radar</v-icon>
-                 <span class="d-none d-sm-inline">{{ status.scan.running ? 'Scanning...' : 'Scan' }}</span>
-             </v-btn>
+                 <v-btn color="primary" :loading="status.scan.running" @click="startScan" variant="tonal" size="small" style="min-width: 0; padding: 0 8px;">
+                     <v-icon :start="!mobile">mdi-radar</v-icon>
+                     <span class="d-none d-sm-inline ml-1">{{ status.scan.running ? 'Scanning...' : 'Scan' }}</span>
+                 </v-btn>
+             </div>
         </div>
+        
         <div class="flex-grow-1 w-100 bg-[#121212] overflow-hidden" style="min-height: 0;">
             <v-data-table 
               :headers="mediaHeaders" :items="mediaList" :search="search" density="compact" 
@@ -261,18 +271,17 @@
 
            <v-card color="#1E1E1E" title="STRM Configuration" class="mb-4" border>
               <v-card-text>
-                  <v-text-field v-model="config.strm_path" label="STRM Output Path" variant="outlined" density="compact" class="mb-3" bg-color="#222" hint="指定 Alist 上存放 strm 檔的目錄 (如: /Cloud/strm)" persistent-hint prepend-inner-icon="mdi-folder-play"></v-text-field>
-                  
-                  <v-row align="center">
-                      <v-col cols="12" md="6">
-                          <v-switch v-model="config.strm_auto_sync" label="Enable Auto STRM Full Sync" color="info" hide-details inset></v-switch>
-                          <div class="text-caption text-grey ml-2 mt-1">定期掃描並進行全量比對，確保檔案完全一致 (平常的增刪改查已會自動觸發更新)。</div>
-                      </v-col>
-                      <v-col cols="12" md="6">
-                          <v-text-field v-model="config.strm_sync_interval" label="Full Sync Interval (Minutes)" type="number" variant="outlined" density="compact" bg-color="#222" hide-details></v-text-field>
-                          <div class="text-caption text-grey mt-1">預設: 1440 分鐘 (每天 1 次)</div>
-                      </v-col>
-                  </v-row>
+                  <v-text-field 
+                      v-model="config.strm_path" 
+                      label="STRM Output Path" 
+                      variant="outlined" 
+                      density="compact" 
+                      bg-color="#222" 
+                      hint="指定 Alist 上存放 strm 檔的目標目錄 (例如: /Cloud/strm)" 
+                      persistent-hint 
+                      prepend-inner-icon="mdi-folder-play"
+                      hide-details="auto"
+                  ></v-text-field>
               </v-card-text>
            </v-card>
 
@@ -478,7 +487,6 @@ const drawer = ref(true);
 const rail = ref(true); 
 const currentView = ref('media'); 
 const config = ref({}); 
-// [MODIFIED] Added sync.last and sync.next to initial state
 const status = reactive({ 
     space: { free: '?', total: '?' }, 
     scan: { last: '...', next: '...', running: false },
@@ -500,14 +508,11 @@ const fmHeaders = [ { title: 'Name', key: 'name', align: 'start', sortable: true
 const getRaw = (item) => item && item.raw ? item.raw : item
 const fmDialog = ref(false); const detailsDialog = ref(false); const selectedMedia = ref(null); const detailData = ref(null); const folderList = ref([]); const currentFolder = ref(''); const fileList = ref([]); const selectedFiles = ref([]); const uploadFiles = ref([])
 
-// [NEW] Scan Options and Selected Target
 const scanTarget = ref("All")
 const scanOptions = ref(["All"])
 
-// [NEW] Search variable for File Manager
 const fmSearch = ref('')
 
-// [MODIFIED] New state for Log Pause
 const autoScrollPaused = ref(false)
 let logPauseTimer = null
 
@@ -526,22 +531,15 @@ const changeView = (view) => {
     }
 }
 
-// [MODIFIED] Helper for scrolling to bottom
 const scrollToBottom = () => {
     if (logBox.value) {
         logBox.value.scrollTop = logBox.value.scrollHeight
     }
 }
 
-// [MODIFIED] Handle User Interaction with Logs
 const handleLogUserInteraction = () => {
-    // 1. Pause auto-scroll immediately
     autoScrollPaused.value = true
-    
-    // 2. Reset existing timer
     if (logPauseTimer) clearTimeout(logPauseTimer)
-    
-    // 3. Set new 10-second timer to resume
     logPauseTimer = setTimeout(() => {
         autoScrollPaused.value = false
         scrollToBottom()
@@ -552,7 +550,6 @@ watch(currentView, (newVal) => { if (newVal === 'logs') startLogPolling(); else 
 const startSync = () => { if (ws && ws.readyState === 1) { ws.send("start_sync"); showMsg('Sync Started') } else showMsg('WS Disconnected') }
 const stopSync = async () => { try { await axios.post('api/sync/stop'); showMsg('Sync Stopped'); await fetchConfig(); } catch(e){ console.error(e) } }
 
-// [MODIFIED] Updated startScan to include target
 const startScan = async () => { 
     try { 
         let target = null;
@@ -569,6 +566,8 @@ const startScan = async () => {
         showMsg('Error'); console.error(e) 
     } 
 }
+
+// [新增] 產生 STRM 的功能
 const generateStrm = async () => { 
     showMsg('Generating STRM files...'); 
     try { 
@@ -579,6 +578,7 @@ const generateStrm = async () => {
         console.error(e); 
     } 
 }
+
 const loadMedia = async () => { try { const r = await axios.get('api/media'); mediaList.value = r.data } catch(e){ mediaList.value=[] } }
 const clearDB = async () => { if(confirm('Clear DB?')) { try { await axios.post('api/media/clear'); showMsg('Cleared'); await loadMedia() } catch(e){ console.error(e) } } }
 const refreshItem = async (data) => { if(data){ showMsg(`Refreshing: ${data.name}...`); try { await axios.post(`api/media/${data.id}/refresh`); showMsg(`Refreshed: ${data.name}`); await loadMedia() } catch(e){ showMsg('Error') } } }
@@ -603,7 +603,6 @@ const openDetails = async (data) => {
 const openFileManager = async (data) => { 
     if(data){ 
         selectedMedia.value=data; 
-        // [MODIFIED] Clear search when opening FM
         fmSearch.value = ''; 
         try { 
             const r = await axios.get(`api/media/${data.id}/folders`); 
@@ -634,7 +633,6 @@ const connectWs = () => {
         else if(d.type==='log'){ 
             if(currentView.value === 'logs') {
                 logContent.value += d.msg + '\n'
-                // [MODIFIED] Only scroll if not paused
                 nextTick(() => { 
                     if (!autoScrollPaused.value) scrollToBottom() 
                 })
@@ -645,7 +643,6 @@ const connectWs = () => {
     ws.onclose = () => setTimeout(connectWs, 2000)
 }
 
-// [NEW] Fetch Drives for Dropdown
 const fetchDrives = async () => {
     try {
         const r = await axios.get('api/drives');
@@ -690,7 +687,7 @@ onMounted(() => {
     }
 
     fetchConfig(); 
-    fetchDrives(); // Initial fetch
+    fetchDrives(); 
     fetchStatus(); 
     loadMedia(); 
     connectWs(); 
@@ -726,4 +723,3 @@ html, body { overflow: hidden; height: 100%; margin: 0; background: #121212; }
   .hidden-xs { display: none !important; }
 }
 </style>
-

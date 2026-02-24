@@ -110,9 +110,13 @@
                  <v-icon start>mdi-delete-sweep</v-icon>
                  <span class="d-none d-sm-inline">Clear DB</span>
              </v-btn>
-             
+
+             <v-btn color="info" variant="text" size="small" @click="generateStrm" style="min-width: 0;">
+                 <v-icon start>mdi-file-video</v-icon>
+                 <span class="d-none d-sm-inline">Gen STRM</span>
+             </v-btn>
+
              <v-divider vertical class="mx-2"></v-divider>
-             
              <v-btn color="primary" :loading="status.scan.running" @click="startScan" variant="tonal" style="min-width: 0;">
                  <v-icon start>mdi-radar</v-icon>
                  <span class="d-none d-sm-inline">{{ status.scan.running ? 'Scanning...' : 'Scan' }}</span>
@@ -252,6 +256,23 @@
                   <v-text-field v-model="config.token" label="Token" variant="outlined" density="compact" type="password" class="mb-3" bg-color="#222"></v-text-field>
                   <v-text-field v-model="config.path" label="Cloud Root Path" variant="outlined" density="compact" class="mb-3" bg-color="#222"></v-text-field>
                   <v-text-field v-model="config.rclone_conf" label="Rclone Config Path" variant="outlined" density="compact" bg-color="#222" hint="Absolute path inside container" persistent-hint></v-text-field>
+              </v-card-text>
+           </v-card>
+
+           <v-card color="#1E1E1E" title="STRM Configuration" class="mb-4" border>
+              <v-card-text>
+                  <v-text-field v-model="config.strm_path" label="STRM Output Path" variant="outlined" density="compact" class="mb-3" bg-color="#222" hint="指定 Alist 上存放 strm 檔的目錄 (如: /Cloud/strm)" persistent-hint prepend-inner-icon="mdi-folder-play"></v-text-field>
+                  
+                  <v-row align="center">
+                      <v-col cols="12" md="6">
+                          <v-switch v-model="config.strm_auto_sync" label="Enable Auto STRM Full Sync" color="info" hide-details inset></v-switch>
+                          <div class="text-caption text-grey ml-2 mt-1">定期掃描並進行全量比對，確保檔案完全一致 (平常的增刪改查已會自動觸發更新)。</div>
+                      </v-col>
+                      <v-col cols="12" md="6">
+                          <v-text-field v-model="config.strm_sync_interval" label="Full Sync Interval (Minutes)" type="number" variant="outlined" density="compact" bg-color="#222" hide-details></v-text-field>
+                          <div class="text-caption text-grey mt-1">預設: 1440 分鐘 (每天 1 次)</div>
+                      </v-col>
+                  </v-row>
               </v-card-text>
            </v-card>
 

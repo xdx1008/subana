@@ -681,7 +681,7 @@ def get_cloud_drives(alist_url, token, root_path="/Cloud"):
     if not files: return []
     return sorted([f['name'] for f in files if f['is_dir']])
 
-def run_library_scan(alist_url, token, target_path="/Cloud"):
+def run_library_scan(alist_url, token, target_path="/Cloud", strm_path=None):
     client = AlistClient(alist_url, token)
     logging.info("="*40)
     logging.info(f"🚀 Scan Started. Target: {target_path}")
@@ -699,6 +699,7 @@ def run_library_scan(alist_url, token, target_path="/Cloud"):
             return False 
         scanned_scopes.add(drive_path) 
         folder_map = {item['name'].lower(): item['name'] for item in sub_folders if item['is_dir']}
+        
         if 'movies' in folder_map:
             m_path = posixpath.join(drive_path, folder_map['movies'])
             m_list = client.list_files(m_path)
@@ -708,8 +709,14 @@ def run_library_scan(alist_url, token, target_path="/Cloud"):
                     if not m['is_dir']: continue
                     full = posixpath.join(m_path, m['name'])
                     exists, success = process_movie_item(client, drive_id, m['name'], full, force=False)
-                    if success and exists: found_paths.add(full)
+                    if success and exists: 
+                        found_paths.add(full)
+                        # [精準同步] 僅針對本次掃描到的影片更新 STRM
+                        if strm_path:
+                            row = get_media_by_path(full)
+                            if row: StrmManager.sync_for_media(client, alist_url.rstrip('/'), row, strm_path)
             else: logging.error(f"❌ Failed to list movies folder: {m_path}")
+            
         if 'tv' in folder_map:
             t_path = posixpath.join(drive_path, folder_map['tv'])
             t_list = client.list_files(t_path)
@@ -719,7 +726,12 @@ def run_library_scan(alist_url, token, target_path="/Cloud"):
                     if not t['is_dir']: continue
                     full = posixpath.join(t_path, t['name'])
                     exists, success = process_tv_item(client, drive_id, t['name'], full, force=False)
-                    if success and exists: found_paths.add(full)
+                    if success and exists: 
+                        found_paths.add(full)
+                        # [精準同步] 僅針對本次掃描到的影集更新 STRM
+                        if strm_path:
+                            row = get_media_by_path(full)
+                            if row: StrmManager.sync_for_media(client, alist_url.rstrip('/'), row, strm_path)
             else: logging.error(f"❌ Failed to list TV folder: {t_path}")
         return True
 
@@ -754,12 +766,20 @@ def run_library_scan(alist_url, token, target_path="/Cloud"):
             if in_scope:
                 if path not in found_paths:
                     logging.info(f"🗑️ [CLEANUP] Removing missing media: {path}")
+                    
+                    # [精準刪除] 在資料庫刪除前，先根據紀錄把 STRM 雲端目錄砍掉
+                    if strm_path:
+                        cur = conn.execute("SELECT type, name FROM media WHERE id = ?", (mid,))
+                        row = cur.fetchone()
+                        if row:
+                            StrmManager.remove_for_media(client, row['type'], row['name'], strm_path)
+                            
                     conn.execute("DELETE FROM media WHERE id = ?", (mid,))
                     deleted_count += 1
         if deleted_count > 0: logging.info(f"🧹 Cleanup finished: Removed {deleted_count} items.")
     logging.info("🏁 Scan Finished!")
 
-def run_single_refresh(alist_url, token, media_id):
+def run_single_refresh(alist_url, token, media_id, strm_path=None):
     client = AlistClient(alist_url, token)
     row = get_media_by_id(media_id)
     if not row: return
@@ -775,71 +795,130 @@ def run_single_refresh(alist_url, token, media_id):
         with get_db_connection() as conn: conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
     elif not success:
         logging.error(f"❌ Refresh failed for {row['name']} due to API error.")
+    else:
+        # 即時更新 STRM 檔案與字幕
+        if strm_path:
+            row_updated = get_media_by_id(media_id)
+            StrmManager.sync_for_media(client, alist_url.rstrip('/'), row_updated, strm_path)
     logging.info(f"🏁 Refresh Done: {row['name']}")
 
-def generate_strm_files(alist_url, token, target_alist_path="/Cloud/strm"):
-    import urllib.parse
-    import posixpath
-    
-    # 初始化 Alist 客戶端
-    client = AlistClient(alist_url, token)
-    
-    # 取得所有媒體資料
-    all_media = get_all_media("All", "")
-    base_url = alist_url.rstrip('/')
-    count = 0
-    
-    # 定義在 Alist 上的目標資料夾
-    movies_dir = posixpath.join(target_alist_path, 'movies')
-    tv_dir = posixpath.join(target_alist_path, 'tv')
-    
-    for media in all_media:
-        m_type = media['type']
-        m_name = media['name']
-        full_path = media['full_path']
+class StrmManager:
+    @staticmethod
+    def get_target_dir(strm_root, m_type, m_name, season=None):
+        import posixpath
+        base = posixpath.join(strm_root, 'movies' if m_type == 'movie' else 'tv', m_name)
+        if season and m_type != 'movie':
+            base = posixpath.join(base, season)
+        return base
+
+    @staticmethod
+    def remove_for_media(client, m_type, m_name, strm_root):
+        import posixpath, logging
+        target_dir = StrmManager.get_target_dir(strm_root, m_type, m_name)
+        parent_dir = posixpath.dirname(target_dir)
+        folder_name = posixpath.basename(target_dir)
+        if client.remove_files(parent_dir, [folder_name]):
+            logging.info(f"🗑️ [STRM] 刪除整個媒體目錄: {target_dir}")
+
+    @staticmethod
+    def sync_for_media(client, base_url, media_row, strm_root):
+        import posixpath, urllib.parse, os, json, logging
+        m_type = media_row['type']
+        m_name = media_row['name']
+        full_path = media_row['full_path']
         
-        try:
-            subs_data = json.loads(media['all_subs']) if media['all_subs'] else []
-        except:
-            continue
+        try: subs_data = json.loads(media_row['all_subs']) if media_row['all_subs'] else []
+        except: subs_data = []
+        
+        if not subs_data:
+            StrmManager.remove_for_media(client, m_type, m_name, strm_root)
+            return 0
             
+        count = 0
+        valid_seasons = set()
+        
         for season_data in subs_data:
             season = season_data.get('season')
-            try:
-                eps = json.loads(season_data.get('subs', '[]'))
-            except:
-                continue
-                
+            if season: valid_seasons.add(season)
+            
+            try: eps = json.loads(season_data.get('subs', '[]'))
+            except: continue
+            
+            target_dir = StrmManager.get_target_dir(strm_root, m_type, m_name, season)
+            source_dir = full_path if m_type == 'movie' else posixpath.join(full_path, season)
+            
+            expected_files = set()
+            existing = client.list_files(target_dir)
+            existing_names = [f['name'] for f in existing if not f['is_dir']] if existing else []
+            
             for ep in eps:
                 ep_name = ep.get('name')
                 if not ep_name: continue
                 
-                # 決定 Alist 上的儲存路徑結構
-                if m_type == 'movie':
-                    target_dir = posixpath.join(movies_dir, m_name)
-                    file_path = posixpath.join(full_path, ep_name)
-                else:
-                    target_dir = posixpath.join(tv_dir, m_name, season)
-                    file_path = posixpath.join(full_path, season, ep_name)
-                    
-                # 替換副檔名為 .strm
                 strm_filename = os.path.splitext(ep_name)[0] + '.strm'
+                expected_files.add(strm_filename)
+                
                 strm_full_path = posixpath.join(target_dir, strm_filename)
+                clean_path = posixpath.join(source_dir, ep_name).replace('//', '/')
                 
-                # 清理原始影片路徑並進行 URL 編碼
-                clean_path = file_path.replace('//', '/')
+                # 恢復使用最穩定的 Alist 302 導向路徑
                 encoded_path = urllib.parse.quote(clean_path, safe='/')
-                
-                # 建立 Alist 直鏈 URL (預設 /d/ 路徑)
                 strm_url = f"{base_url}/d{encoded_path}"
                 
-                # 透過 Alist API 將內容寫入網盤 (Alist put API 接受 bytes 格式)
-                success = client.put_file(strm_full_path, strm_url.encode('utf-8'))
+                # 寫入 STRM 並加上 Log 紀錄
+                client.put_file(strm_full_path, strm_url.encode('utf-8'))
+                logging.info(f"📄 [STRM] 產生/更新檔案: {strm_full_path}")
+                count += 1
                 
-                if success:
-                    count += 1
-                else:
-                    logging.error(f"❌ Failed to upload STRM to Alist: {strm_full_path}")
+                # 同步外部字幕檔
+                detail = ep.get('detail', '')
+                if '[外部]' in detail:
+                    sub_name = detail.replace('[外部]', '').strip()
+                    expected_files.add(sub_name)
+                    if sub_name not in existing_names:
+                        client.copy(source_dir, target_dir, [sub_name])
+                        logging.info(f"📝 [STRM] 複製字幕檔: {posixpath.join(target_dir, sub_name)}")
+                        
+            # 清理該資料夾下多餘的失效檔案 (被刪除的影片或字幕)
+            to_remove = [name for name in existing_names if name not in expected_files]
+            if to_remove:
+                client.remove_files(target_dir, to_remove)
+                logging.info(f"✂️ [STRM] 刪除失效檔案: {to_remove}")
                 
-    logging.info(f"✅ STRM Generation completed: {count} files uploaded to {target_alist_path}")
+        # 針對 TV 清理多餘的季別資料夾
+        if m_type == 'tv':
+            base_dir = StrmManager.get_target_dir(strm_root, m_type, m_name)
+            existing_seasons = client.list_files(base_dir)
+            if existing_seasons:
+                to_remove_seasons = [f['name'] for f in existing_seasons if f['is_dir'] and f['name'] not in valid_seasons]
+                if to_remove_seasons:
+                    client.remove_files(base_dir, to_remove_seasons)
+                    logging.info(f"✂️ [STRM] 刪除失效季目錄: {to_remove_seasons}")
+                    
+        return count
+
+def sync_all_strm(alist_url, token, strm_path):
+    import posixpath, logging
+    client = AlistClient(alist_url, token)
+    all_media = get_all_media("All", "")
+    base_url = alist_url.rstrip('/')
+    count = 0
+    valid_movies = set(); valid_tv = set()
+    
+    logging.info("🚀 [STRM] 開始執行全量同步...")
+    for media in all_media:
+        if media['type'] == 'movie': valid_movies.add(media['name'])
+        else: valid_tv.add(media['name'])
+        count += StrmManager.sync_for_media(client, base_url, media, strm_path)
+        
+    for cat, valid_set in [('movies', valid_movies), ('tv', valid_tv)]:
+        cat_path = posixpath.join(strm_path, cat)
+        folders = client.list_files(cat_path)
+        if folders:
+            to_remove = [f['name'] for f in folders if f['is_dir'] and f['name'] not in valid_set]
+            if to_remove:
+                client.remove_files(cat_path, to_remove)
+                logging.info(f"🗑️ [STRM] 深度清理失效目錄 ({cat}): {to_remove}")
+                
+    logging.info(f"✅ [STRM] 全量同步完成 (共處理 {count} 個項目)")
     return count

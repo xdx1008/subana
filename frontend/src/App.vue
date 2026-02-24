@@ -548,7 +548,16 @@ const startScan = async () => {
         showMsg('Error'); console.error(e) 
     } 
 }
-
+const generateStrm = async () => { 
+    showMsg('Generating STRM files...'); 
+    try { 
+        const r = await axios.post('api/strm/generate'); 
+        showMsg(`Success! Generated ${r.data.count} STRM files to ${r.data.path}`); 
+    } catch(e) { 
+        showMsg('Error generating STRM'); 
+        console.error(e); 
+    } 
+}
 const loadMedia = async () => { try { const r = await axios.get('api/media'); mediaList.value = r.data } catch(e){ mediaList.value=[] } }
 const clearDB = async () => { if(confirm('Clear DB?')) { try { await axios.post('api/media/clear'); showMsg('Cleared'); await loadMedia() } catch(e){ console.error(e) } } }
 const refreshItem = async (data) => { if(data){ showMsg(`Refreshing: ${data.name}...`); try { await axios.post(`api/media/${data.id}/refresh`); showMsg(`Refreshed: ${data.name}`); await loadMedia() } catch(e){ showMsg('Error') } } }
@@ -696,3 +705,4 @@ html, body { overflow: hidden; height: 100%; margin: 0; background: #121212; }
   .hidden-xs { display: none !important; }
 }
 </style>
+

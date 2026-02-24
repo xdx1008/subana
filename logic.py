@@ -830,6 +830,7 @@ class StrmManager:
         try: subs_data = json.loads(media_row['all_subs']) if media_row['all_subs'] else []
         except: subs_data = []
         
+        # 如果該媒體已經沒有任何有效內容，直接刪除整個 STRM 目錄
         if not subs_data:
             StrmManager.remove_for_media(client, m_type, m_name, strm_root)
             return 0
@@ -858,34 +859,33 @@ class StrmManager:
                 strm_filename = os.path.splitext(ep_name)[0] + '.strm'
                 expected_files.add(strm_filename)
                 
+                # 【強制覆寫】不再判斷檔案是否存在，直接產生並覆寫 .strm，確保連結 100% 最新
                 strm_full_path = posixpath.join(target_dir, strm_filename)
                 clean_path = posixpath.join(source_dir, ep_name).replace('//', '/')
                 
-                # 恢復使用最穩定的 Alist 302 導向路徑
                 encoded_path = urllib.parse.quote(clean_path, safe='/')
                 strm_url = f"{base_url}/d{encoded_path}"
                 
-                # 寫入 STRM 並加上 Log 紀錄
                 client.put_file(strm_full_path, strm_url.encode('utf-8'))
-                logging.info(f"📄 [STRM] 產生/更新檔案: {strm_full_path}")
+                logging.info(f"📄 [STRM] 產生/覆寫檔案: {strm_full_path}")
                 count += 1
                 
-                # 同步外部字幕檔
+                # 【強制覆寫】字幕檔移除略過判斷，每次都強制執行複製覆寫，確保內容完全一致
                 detail = ep.get('detail', '')
                 if '[外部]' in detail:
                     sub_name = detail.replace('[外部]', '').strip()
                     expected_files.add(sub_name)
-                    if sub_name not in existing_names:
-                        client.copy(source_dir, target_dir, [sub_name])
-                        logging.info(f"📝 [STRM] 複製字幕檔: {posixpath.join(target_dir, sub_name)}")
+                    
+                    client.copy(source_dir, target_dir, [sub_name])
+                    logging.info(f"📝 [STRM] 複製/覆寫字幕檔: {posixpath.join(target_dir, sub_name)}")
                         
-            # 清理該資料夾下多餘的失效檔案 (被刪除的影片或字幕)
+            # 【精準刪除】清理該資料夾下多餘的失效檔案 (例如被手動刪除的舊影片或舊字幕)
             to_remove = [name for name in existing_names if name not in expected_files]
             if to_remove:
                 client.remove_files(target_dir, to_remove)
-                logging.info(f"✂️ [STRM] 刪除失效檔案: {to_remove}")
+                logging.info(f"✂️ [STRM] 刪除多餘失效檔案: {to_remove}")
                 
-        # 針對 TV 清理多餘的季別資料夾
+        # 【精準刪除】針對 TV 清理多餘的季別資料夾
         if m_type == 'tv':
             base_dir = StrmManager.get_target_dir(strm_root, m_type, m_name)
             existing_seasons = client.list_files(base_dir)
@@ -893,7 +893,7 @@ class StrmManager:
                 to_remove_seasons = [f['name'] for f in existing_seasons if f['is_dir'] and f['name'] not in valid_seasons]
                 if to_remove_seasons:
                     client.remove_files(base_dir, to_remove_seasons)
-                    logging.info(f"✂️ [STRM] 刪除失效季目錄: {to_remove_seasons}")
+                    logging.info(f"✂️ [STRM] 刪除多餘季目錄: {to_remove_seasons}")
                     
         return count
 

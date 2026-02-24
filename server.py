@@ -64,10 +64,7 @@ def load_config():
         "site_name": "SUBANA MGR",
         "site_icon": "",
         "log_max_size": 2,
-        "strm_path": "/Cloud/strm",
-        "strm_auto_sync": False,
-        "strm_sync_interval": 1440,
-        "last_strm_sync": 0
+        "strm_path": "/Cloud/strm"
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -201,18 +198,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(background_scheduler())
     yield
 
-async def perform_strm_sync():
-    cfg = load_config()
-    strm_path = cfg.get('strm_path')
-    if not strm_path: return
-    try:
-        await asyncio.to_thread(sync_all_strm, cfg['url'], cfg['token'], strm_path)
-        cfg = load_config()
-        cfg['last_strm_sync'] = time.time()
-        save_config(cfg)
-    except Exception as e:
-        logger.error(f"STRM Auto-Sync Error: {e}")
-
 async def background_scheduler():
     logger.info("⏳ Scheduler Started")
     while True:
@@ -232,14 +217,6 @@ async def background_scheduler():
                 if sync_int_sec > 0 and (now - last_sync > sync_int_sec or last_sync == 0):
                     logger.info("⏰ Scheduler: Triggering Auto Sync")
                     asyncio.create_task(perform_rclone_sync())
-            if cfg.get('strm_auto_sync', False) and not state.scan_running:
-                strm_int_sec = int(cfg.get('strm_sync_interval', 1440)) * 60
-                last_strm = cfg.get('last_strm_sync', 0)
-                if strm_int_sec > 0 and (now - last_strm > strm_int_sec or last_strm == 0):
-                    logger.info("⏰ Scheduler: Triggering Auto STRM Sync")
-                    cfg['last_strm_sync'] = now
-                    save_config(cfg)
-                    asyncio.create_task(perform_strm_sync())
         except Exception as e: logger.error(f"Scheduler Error: {e}")
 
 app = FastAPI(lifespan=lifespan)
@@ -251,7 +228,7 @@ class ConfigModel(BaseModel):
     interval: int = 3600; last_free: str = "Unknown"; last_total: str = "Unknown"; sync_interval: int = 60
     last_scan_time: float = 0; last_sync_ts: float = 0; rclone_conf: str = "/root/.config/rclone/rclone.conf"
     site_name: str = "SUBANA MGR"; site_icon: str = ""; log_max_size: int = 2
-    strm_path: str = "/Cloud/strm"; strm_auto_sync: bool = False; strm_sync_interval: int = 1440; last_strm_sync: float = 0
+    strm_path: str = "/Cloud/strm"
 
 class DeleteFileModel(BaseModel):
     media_id: int; folder_path: str; files: List[str]

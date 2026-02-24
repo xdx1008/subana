@@ -15,15 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Any, Dict
 from contextlib import asynccontextmanager
-
 from logic import (
     RcloneHandler, run_library_scan, 
     run_single_refresh, get_media_folders, list_folder_files,
     execute_file_deletion, execute_folder_rename, execute_directory_purge,
     execute_folder_upload, get_season_episode_key, get_cloud_drives
+    generate_strm_files  # <-- 新增這裡
 )
 from database import get_all_media, get_media_by_id, get_subtitles, clear_db
-
 # Constants
 DATA_DIR = '/app/data'
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
@@ -282,6 +281,19 @@ async def trigger_scan(background_tasks: BackgroundTasks, target: Optional[str] 
     background_tasks.add_task(perform_library_scan, target)
     return {"status": "started", "target": target or "Full"}
 
+@app.post("/api/strm/generate")
+async def api_generate_strm():
+    cfg = load_config()
+    try:
+        # 指定輸出路徑至容器內的 /app/data/strm (對應宿主機 ./app/data/strm)
+        output_dir = os.path.join(DATA_DIR, 'strm')
+        count = await asyncio.to_thread(generate_strm_files, cfg['url'], cfg['token'], output_dir)
+        return {"status": "ok", "count": count, "path": output_dir}
+    except Exception as e:
+        logger.error(f"STRM Generation Error: {e}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 @app.get("/api/drives")
 async def get_drives_list():
     cfg = load_config()
@@ -406,3 +418,4 @@ async def websocket_endpoint(websocket: WebSocket):
     except: pass
     
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+

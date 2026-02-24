@@ -1,0 +1,22 @@
+# 系統垃圾檔 (OS generated files)
+.DS_Store
+.DS_Store?
+ehthumbs.db
+Icon?
+Thumbs.db
+
+# 執行環境與敏感資訊 (Environment variables / Secrets)
+.env
+.env.local
+.env.*.local
+
+# Docker 相關 (Docker logs and temp files)
+.dockerignore
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 套件管理 (Dependencies)
+node_modules/
+/dist
+/build

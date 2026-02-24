@@ -283,12 +283,14 @@ async def trigger_scan(background_tasks: BackgroundTasks, target: Optional[str] 
 
 @app.post("/api/strm/generate")
 async def api_generate_strm():
+    import posixpath
     cfg = load_config()
     try:
-        # 指定輸出路徑至容器內的 /app/data/strm (對應宿主機 ./app/data/strm)
-        output_dir = os.path.join(DATA_DIR, 'strm')
-        count = await asyncio.to_thread(generate_strm_files, cfg['url'], cfg['token'], output_dir)
-        return {"status": "ok", "count": count, "path": output_dir}
+        # 讀取您設定的 Cloud Root Path (例如 /Cloud)，並將 strm 存在其底下
+        target_alist_path = posixpath.join(cfg.get('path', '/Cloud'), 'strm')
+        
+        count = await asyncio.to_thread(generate_strm_files, cfg['url'], cfg['token'], target_alist_path)
+        return {"status": "ok", "count": count, "path": target_alist_path}
     except Exception as e:
         logger.error(f"STRM Generation Error: {e}")
         from fastapi.responses import JSONResponse
@@ -418,4 +420,5 @@ async def websocket_endpoint(websocket: WebSocket):
     except: pass
     
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
 

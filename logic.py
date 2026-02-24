@@ -776,3 +776,70 @@ def run_single_refresh(alist_url, token, media_id):
     elif not success:
         logging.error(f"❌ Refresh failed for {row['name']} due to API error.")
     logging.info(f"🏁 Refresh Done: {row['name']}")
+
+def generate_strm_files(alist_url, token, target_alist_path="/Cloud/strm"):
+    import urllib.parse
+    import posixpath
+    
+    # 初始化 Alist 客戶端
+    client = AlistClient(alist_url, token)
+    
+    # 取得所有媒體資料
+    all_media = get_all_media("All", "")
+    base_url = alist_url.rstrip('/')
+    count = 0
+    
+    # 定義在 Alist 上的目標資料夾
+    movies_dir = posixpath.join(target_alist_path, 'movies')
+    tv_dir = posixpath.join(target_alist_path, 'tv')
+    
+    for media in all_media:
+        m_type = media['type']
+        m_name = media['name']
+        full_path = media['full_path']
+        
+        try:
+            subs_data = json.loads(media['all_subs']) if media['all_subs'] else []
+        except:
+            continue
+            
+        for season_data in subs_data:
+            season = season_data.get('season')
+            try:
+                eps = json.loads(season_data.get('subs', '[]'))
+            except:
+                continue
+                
+            for ep in eps:
+                ep_name = ep.get('name')
+                if not ep_name: continue
+                
+                # 決定 Alist 上的儲存路徑結構
+                if m_type == 'movie':
+                    target_dir = posixpath.join(movies_dir, m_name)
+                    file_path = posixpath.join(full_path, ep_name)
+                else:
+                    target_dir = posixpath.join(tv_dir, m_name, season)
+                    file_path = posixpath.join(full_path, season, ep_name)
+                    
+                # 替換副檔名為 .strm
+                strm_filename = os.path.splitext(ep_name)[0] + '.strm'
+                strm_full_path = posixpath.join(target_dir, strm_filename)
+                
+                # 清理原始影片路徑並進行 URL 編碼
+                clean_path = file_path.replace('//', '/')
+                encoded_path = urllib.parse.quote(clean_path, safe='/')
+                
+                # 建立 Alist 直鏈 URL (預設 /d/ 路徑)
+                strm_url = f"{base_url}/d{encoded_path}"
+                
+                # 透過 Alist API 將內容寫入網盤 (Alist put API 接受 bytes 格式)
+                success = client.put_file(strm_full_path, strm_url.encode('utf-8'))
+                
+                if success:
+                    count += 1
+                else:
+                    logging.error(f"❌ Failed to upload STRM to Alist: {strm_full_path}")
+                
+    logging.info(f"✅ STRM Generation completed: {count} files uploaded to {target_alist_path}")
+    return count

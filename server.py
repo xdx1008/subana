@@ -129,12 +129,10 @@ async def perform_library_scan(target=None):
     state.scan_running = True
     cfg = load_config()
     target_path = target if target else cfg['path']
-    strm_path = cfg.get('strm_path') # 直接在這裡讀取設定
-    
     try:
         logger.info(f"🚀 Library Scan Started (Target: {target_path})")
-        # 傳入 strm_path
-        await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], target_path, strm_path)
+        # 【修改】帶入 STRM 路徑
+        await asyncio.to_thread(run_library_scan, cfg['url'], cfg['token'], target_path, cfg.get('strm_path'))
         
         if target_path == cfg['path']:
             cfg = load_config()
@@ -180,6 +178,8 @@ async def perform_rclone_sync():
             for k in to_del: del state.active_files[k]
             await asyncio.sleep(0.01)
         logger.info("✅ Rclone Sync Finished")
+        logger.info("🔄 Triggering Library Scan after Sync to update STRM...")
+        asyncio.create_task(perform_library_scan())
         try:
             free, total = await asyncio.to_thread(RcloneHandler.get_remote_free_space, cfg.get('remote_path'))
             state.remote_free = free; state.remote_total = total
@@ -295,7 +295,8 @@ async def api_generate_strm():
         target_path = cfg.get('strm_path', '/Cloud/strm')
         count = await asyncio.to_thread(sync_all_strm, cfg['url'], cfg['token'], target_path)
         return {"status": "ok", "count": count, "path": target_path}
-    except Exception as e: return JSONResponse(status_code=500, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/drives")
 async def get_drives_list():
@@ -347,14 +348,16 @@ async def get_media_detail(mid: int):
 
 @app.post("/api/media/{mid}/refresh")
 async def refresh_media(mid: int):
+    logger.info(f"🔄 Refreshing media item {mid}...")
     cfg = load_config()
     await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], mid, cfg.get('strm_path'))
     return {"status": "ok"}
 
 @app.post("/api/media/clear")
 async def clear_database():
-    cfg = load_config()
+    logger.info("🗑️ Clearing database...")
     await asyncio.to_thread(clear_db)
+    cfg = load_config()
     strm_path = cfg.get('strm_path')
     if strm_path:
         from logic import AlistClient
@@ -392,6 +395,7 @@ async def rename_files(data: RenameModel):
 async def purge_directory(data: PurgeModel):
     cfg = load_config()
     logs = await asyncio.to_thread(execute_directory_purge, cfg['url'], cfg['token'], data.folder_path, data.media_id, data.season_key, cfg['path'])
+    # Purge 後也要連動 STRM 刪除
     await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], data.media_id, cfg.get('strm_path'))
     return {"logs": logs}
 
@@ -402,6 +406,7 @@ async def upload_files(media_id: int = Form(...), folder_path: str = Form(...), 
     files_data = {}
     for file in files: content = await file.read(); files_data[file.filename] = content
     logs = await asyncio.to_thread(execute_folder_upload, cfg['url'], cfg['token'], folder_path, files_data)
+    # 這裡就是上傳字幕後，自動同步字幕到 STRM 資料夾的關鍵
     await asyncio.to_thread(run_single_refresh, cfg['url'], cfg['token'], media_id, cfg.get('strm_path'))
     return {"logs": logs}
 

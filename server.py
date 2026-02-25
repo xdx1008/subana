@@ -282,8 +282,10 @@ async def get_logs():
 
 @app.post("/api/scan")
 async def trigger_scan(background_tasks: BackgroundTasks, target: Optional[str] = None):
-    if state.scan_running: return {"status": "running"}
-    background_tasks.add_task(perform_library_scan, target, cfg.get('strm_path'))
+    if state.scan_running: 
+        return {"status": "running"}
+    background_tasks.add_task(perform_library_scan, target)
+    
     return {"status": "started", "target": target or "Full"}
 
 @app.post("/api/strm/generate")

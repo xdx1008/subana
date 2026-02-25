@@ -830,13 +830,15 @@ class StrmManager:
         try: subs_data = json.loads(media_row['all_subs']) if media_row['all_subs'] else []
         except: subs_data = []
         
-        # 如果該媒體已經沒有任何有效內容，直接刪除整個 STRM 目錄
         if not subs_data:
             StrmManager.remove_for_media(client, m_type, m_name, strm_root)
             return 0
             
         count = 0
         valid_seasons = set()
+        
+        # 【新增】常見的媒體刮削元數據與圖片豁免副檔名清單
+        EXEMPT_EXTS = ('.nfo', '.jpg', '.jpeg', '.png', '.svg', '.xml', '.bif', '.srt', '.ass', '.ssa', '.vtt')
         
         for season_data in subs_data:
             season = season_data.get('season')
@@ -859,7 +861,6 @@ class StrmManager:
                 strm_filename = os.path.splitext(ep_name)[0] + '.strm'
                 expected_files.add(strm_filename)
                 
-                # 【強制覆寫】不再判斷檔案是否存在，直接產生並覆寫 .strm，確保連結 100% 最新
                 strm_full_path = posixpath.join(target_dir, strm_filename)
                 clean_path = posixpath.join(source_dir, ep_name).replace('//', '/')
                 
@@ -870,7 +871,6 @@ class StrmManager:
                 logging.info(f"📄 [STRM] 產生/覆寫檔案: {strm_full_path}")
                 count += 1
                 
-                # 【強制覆寫】字幕檔移除略過判斷，每次都強制執行複製覆寫，確保內容完全一致
                 detail = ep.get('detail', '')
                 if '[外部]' in detail:
                     sub_name = detail.replace('[外部]', '').strip()
@@ -879,21 +879,34 @@ class StrmManager:
                     client.copy(source_dir, target_dir, [sub_name])
                     logging.info(f"📝 [STRM] 複製/覆寫字幕檔: {posixpath.join(target_dir, sub_name)}")
                         
-            # 【精準刪除】清理該資料夾下多餘的失效檔案 (例如被手動刪除的舊影片或舊字幕)
-            to_remove = [name for name in existing_names if name not in expected_files]
+            # 【精準刪除 + 豁免清單】過濾出多餘的檔案，但排除 NFO 與圖片等元數據
+            to_remove = []
+            for name in existing_names:
+                if name not in expected_files:
+                    # 取得副檔名並轉為小寫
+                    ext = posixpath.splitext(name)[1].lower()
+                    # 如果不是豁免的副檔名，才列入刪除清單
+                    if ext not in EXEMPT_EXTS:
+                        to_remove.append(name)
+
             if to_remove:
                 client.remove_files(target_dir, to_remove)
-                logging.info(f"✂️ [STRM] 刪除多餘失效檔案: {to_remove}")
+                logging.info(f"✂️ [STRM] 刪除多餘失效檔案 (已保留豁免檔案): {to_remove}")
                 
-        # 【精準刪除】針對 TV 清理多餘的季別資料夾
+        # 針對 TV 清理多餘的季別資料夾 (保留不變，因為刮削器通常是建立檔案而非隨機資料夾)
         if m_type == 'tv':
             base_dir = StrmManager.get_target_dir(strm_root, m_type, m_name)
             existing_seasons = client.list_files(base_dir)
             if existing_seasons:
-                to_remove_seasons = [f['name'] for f in existing_seasons if f['is_dir'] and f['name'] not in valid_seasons]
+                # 額外過濾掉非季資料夾的元數據資料夾，例如 'extrafanart', 'theme-music'
+                EXEMPT_DIRS = ('extrafanart', 'theme-music', 'backdrops')
+                to_remove_seasons = [
+                    f['name'] for f in existing_seasons 
+                    if f['is_dir'] and f['name'] not in valid_seasons and f['name'].lower() not in EXEMPT_DIRS
+                ]
                 if to_remove_seasons:
                     client.remove_files(base_dir, to_remove_seasons)
-                    logging.info(f"✂️ [STRM] 刪除多餘季目錄: {to_remove_seasons}")
+                    logging.info(f"✂️ [STRM] 刪除多餘目錄: {to_remove_seasons}")
                     
         return count
 

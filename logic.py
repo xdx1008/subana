@@ -424,6 +424,11 @@ def _determine_video_status(ep_name, all_files, full_path, root_path, cached_inf
         media_info = get_detailed_media_info(posixpath.join(full_path, ep_name), root_path)
     
     has_ext, ext_name = check_external_sub(ep_name, all_files)
+    
+    # 【新增】取得來源檔案的大小與修改時間
+    vid_file = next((f for f in all_files if f['name'] == ep_name), {})
+    sub_file = next((f for f in all_files if f['name'] == ext_name), {}) if has_ext else {}
+    
     if has_ext: logging.info(f"   ✅ [EXT] Found: {ext_name}")
     else: logging.info(f"   ❌ [EXT] None")
 
@@ -452,7 +457,16 @@ def _determine_video_status(ep_name, all_files, full_path, root_path, cached_inf
         
     logging.info(f"   🏁 [RESULT] Status: {status}")
     
-    return {"name": ep_name, "status": status, "detail": detail, "media_info": media_info}
+    return {
+        "name": ep_name, 
+        "status": status, 
+        "detail": detail, 
+        "media_info": media_info,
+        "vid_size": vid_file.get('size', 0),
+        "vid_mod": vid_file.get('modified', ''),
+        "sub_size": sub_file.get('size', 0),
+        "sub_mod": sub_file.get('modified', '')
+    }
 
 def process_folder_videos(client, full_path, all_files, existing_data=None):
     results = []
@@ -483,32 +497,40 @@ def process_movie_item(client, drive_id, m_name, m_full_path, force=False):
     logging.info(f"🎥 [MOVIE] {m_name}")
     
     existing_eps = None
+    old_subs_str = ""
     if not force:
         row = get_media_by_path(m_full_path)
         if row and row['all_subs']:
             try:
                 data = json.loads(row['all_subs'])
-                if data and len(data) > 0: existing_eps = json.loads(data[0]['subs'])
+                if data and len(data) > 0: 
+                    existing_eps = json.loads(data[0]['subs'])
+                    old_subs_str = data[0]['subs']
             except: pass
 
     files = client.list_files(m_full_path)
     if files is None: 
         logging.error(f"❌ Failed to list files for {m_full_path}")
-        return False, False 
+        return False, False, False, ""
         
     episodes = process_folder_videos(client, m_full_path, files, existing_eps)
     if episodes:
-        save_media('movie', drive_id, m_name, m_full_path, [{'season': 'Movie', 'subs': json.dumps(episodes)}])
-        return True, True
-    return False, True
+        new_subs_str = json.dumps(episodes)
+        # 只要時間或大小變了，dumps 的字串就會不同，changed 就會是 True
+        changed = (new_subs_str != old_subs_str) or force
+        save_media('movie', drive_id, m_name, m_full_path, [{'season': 'Movie', 'subs': new_subs_str}])
+        return True, True, changed, old_subs_str
+    return False, True, False, ""
 
 def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
     logging.info("=" * 60)
     logging.info(f"📺 [TV] {t_name}")
     
     existing_season_map = {}
+    old_all_subs_str = ""
     row = get_media_by_path(t_full_path)
     if not force and row and row['all_subs']:
+        old_all_subs_str = row['all_subs']
         try:
             data = json.loads(row['all_subs'])
             existing_season_map = {item['season']: item for item in data}
@@ -517,9 +539,9 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
     seasons = client.list_files(t_full_path, refresh=force)
     if seasons is None:
         logging.error(f"❌ Failed to list seasons for {t_full_path}")
-        return False, False 
+        return False, False, False, ""
         
-    if not seasons: return False, True 
+    if not seasons: return False, True, False, ""
     
     final_data = []
     
@@ -542,9 +564,11 @@ def process_tv_item(client, drive_id, t_name, t_full_path, force=False):
         if episodes: final_data.append({'season': s_name, 'subs': json.dumps(episodes)})
 
     if final_data:
+        new_all_subs_str = json.dumps(final_data)
+        changed = (new_all_subs_str != old_all_subs_str) or force
         save_media('tv', drive_id, t_name, t_full_path, final_data)
-        return True, True
-    return False, True
+        return True, True, changed, old_all_subs_str
+    return False, True, False, ""
 
 def get_media_folders(alist_url, token, media_id):
     client = AlistClient(alist_url, token)
@@ -706,15 +730,15 @@ def run_library_scan(alist_url, token, target_path="/Cloud", strm_path=None):
             if m_list is not None:
                 scanned_scopes.add(m_path)
                 for m in m_list:
-                    if not m['is_dir']: continue
-                    full = posixpath.join(m_path, m['name'])
-                    exists, success = process_movie_item(client, drive_id, m['name'], full, force=False)
-                    if success and exists: 
-                        found_paths.add(full)
-                        # [精準同步] 僅針對本次掃描到的影片更新 STRM
-                        if strm_path:
-                            row = get_media_by_path(full)
-                            if row: StrmManager.sync_for_media(client, alist_url.rstrip('/'), row, strm_path)
+                        if not m['is_dir']: continue
+                        full = posixpath.join(m_path, m['name'])
+                        exists, success, changed, old_subs = process_movie_item(client, drive_id, m['name'], full, force=False)
+                        if success and exists: 
+                            found_paths.add(full)
+                            # 只有真正發生變動，才觸發 STRM 同步，並帶入舊資料
+                            if strm_path and changed:
+                                row = get_media_by_path(full)
+                                if row: StrmManager.sync_for_media(client, alist_url.rstrip('/'), row, strm_path, old_subs)
             else: logging.error(f"❌ Failed to list movies folder: {m_path}")
             
         if 'tv' in folder_map:
@@ -723,15 +747,14 @@ def run_library_scan(alist_url, token, target_path="/Cloud", strm_path=None):
             if t_list is not None:
                 scanned_scopes.add(t_path)
                 for t in t_list:
-                    if not t['is_dir']: continue
-                    full = posixpath.join(t_path, t['name'])
-                    exists, success = process_tv_item(client, drive_id, t['name'], full, force=False)
-                    if success and exists: 
-                        found_paths.add(full)
-                        # [精準同步] 僅針對本次掃描到的影集更新 STRM
-                        if strm_path:
-                            row = get_media_by_path(full)
-                            if row: StrmManager.sync_for_media(client, alist_url.rstrip('/'), row, strm_path)
+                        if not t['is_dir']: continue
+                        full = posixpath.join(t_path, t['name'])
+                        exists, success, changed, old_subs = process_tv_item(client, drive_id, t['name'], full, force=False)
+                        if success and exists: 
+                            found_paths.add(full)
+                            if strm_path and changed:
+                                row = get_media_by_path(full)
+                                if row: StrmManager.sync_for_media(client, alist_url.rstrip('/'), row, strm_path, old_subs)
             else: logging.error(f"❌ Failed to list TV folder: {t_path}")
         return True
 
@@ -784,22 +807,23 @@ def run_single_refresh(alist_url, token, media_id, strm_path=None):
     row = get_media_by_id(media_id)
     if not row: return
     logging.info(f"🔄 Manual Refresh: {row['name']}")
-    exists, success = False, False
+    exists, success, changed, old_subs = False, False, False, ""
     if row['type'] == 'movie': 
-        exists, success = process_movie_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
+        exists, success, changed, old_subs = process_movie_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
     elif row['type'] == 'tv': 
-        exists, success = process_tv_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
+        exists, success, changed, old_subs = process_tv_item(client, row['drive_id'], row['name'], row['full_path'], force=False)
     
     if success and not exists:
         logging.info(f"🗑️ [CLEANUP] Media became empty/invalid, removing: {row['name']}")
+        if strm_path:
+            StrmManager.remove_for_media(client, row['type'], row['name'], strm_path)
         with get_db_connection() as conn: conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
     elif not success:
         logging.error(f"❌ Refresh failed for {row['name']} due to API error.")
     else:
-        # 即時更新 STRM 檔案與字幕
-        if strm_path:
+        if strm_path and changed:
             row_updated = get_media_by_id(media_id)
-            StrmManager.sync_for_media(client, alist_url.rstrip('/'), row_updated, strm_path)
+            StrmManager.sync_for_media(client, alist_url.rstrip('/'), row_updated, strm_path, old_subs)
     logging.info(f"🏁 Refresh Done: {row['name']}")
 
 class StrmManager:
@@ -821,7 +845,7 @@ class StrmManager:
             logging.info(f"🗑️ [STRM] 刪除整個媒體目錄: {target_dir}")
 
     @staticmethod
-    def sync_for_media(client, base_url, media_row, strm_root):
+    def sync_for_media(client, base_url, media_row, strm_root, old_subs_str=None):
         import posixpath, urllib.parse, os, json, logging
         m_type = media_row['type']
         m_name = media_row['name']
@@ -830,14 +854,26 @@ class StrmManager:
         try: subs_data = json.loads(media_row['all_subs']) if media_row['all_subs'] else []
         except: subs_data = []
         
+        # 建立舊狀態比對地圖
+        old_ep_map = {}
+        if old_subs_str:
+            try:
+                old_data = json.loads(old_subs_str)
+                if m_type == 'movie':
+                    eps = json.loads(old_data) if isinstance(old_data, str) else old_data
+                    for ep in eps: old_ep_map[ep['name']] = ep
+                else:
+                    for s in old_data:
+                        eps = json.loads(s['subs']) if isinstance(s['subs'], str) else s['subs']
+                        for ep in eps: old_ep_map[ep['name']] = ep
+            except: pass
+        
         if not subs_data:
             StrmManager.remove_for_media(client, m_type, m_name, strm_root)
             return 0
             
         count = 0
         valid_seasons = set()
-        
-        # 【新增】常見的媒體刮削元數據與圖片豁免副檔名清單
         EXEMPT_EXTS = ('.nfo', '.jpg', '.jpeg', '.png', '.svg', '.xml', '.bif', '.srt', '.ass', '.ssa', '.vtt')
         
         for season_data in subs_data:
@@ -858,34 +894,47 @@ class StrmManager:
                 ep_name = ep.get('name')
                 if not ep_name: continue
                 
+                old_ep = old_ep_map.get(ep_name, {})
                 strm_filename = os.path.splitext(ep_name)[0] + '.strm'
                 expected_files.add(strm_filename)
                 
-                strm_full_path = posixpath.join(target_dir, strm_filename)
-                clean_path = posixpath.join(source_dir, ep_name).replace('//', '/')
-                
-                encoded_path = urllib.parse.quote(clean_path, safe='/')
-                strm_url = f"{base_url}/d{encoded_path}"
-                
-                client.put_file(strm_full_path, strm_url.encode('utf-8'))
-                logging.info(f"📄 [STRM] 產生/覆寫檔案: {strm_full_path}")
-                count += 1
+                # 【STRM 生成邏輯】只在不存在時產生，永不需要覆寫 (因影片檔名不變，跳轉 URL 就不會變)
+                if strm_filename not in existing_names:
+                    strm_full_path = posixpath.join(target_dir, strm_filename)
+                    clean_path = posixpath.join(source_dir, ep_name).replace('//', '/')
+                    encoded_path = urllib.parse.quote(clean_path, safe='/')
+                    strm_url = f"{base_url}/d{encoded_path}"
+                    client.put_file(strm_full_path, strm_url.encode('utf-8'))
+                    logging.info(f"📄 [STRM] 產生新檔案: {strm_full_path}")
+                    count += 1
                 
                 detail = ep.get('detail', '')
                 if '[外部]' in detail:
                     sub_name = detail.replace('[外部]', '').strip()
                     expected_files.add(sub_name)
                     
-                    client.copy(source_dir, target_dir, [sub_name])
-                    logging.info(f"📝 [STRM] 複製/覆寫字幕檔: {posixpath.join(target_dir, sub_name)}")
+                    # 【字幕複製邏輯】不存在時複製，或比對資料庫「來源修改時間」有變更才覆寫
+                    needs_sub = False
+                    if sub_name not in existing_names:
+                        needs_sub = True
+                    elif old_subs_str is not None:
+                        # 這是日常掃描：只要來源的修改時間或大小與「舊資料庫」不同，代表內容被編輯過了
+                        if ep.get('sub_mod') != old_ep.get('sub_mod') or ep.get('sub_size') != old_ep.get('sub_size'):
+                            needs_sub = True
+                    else:
+                        # 這是強制全量同步：無法比較新舊資料庫，改為核對目標資料夾的檔案大小
+                        target_sub = next((f for f in existing if f['name'] == sub_name), {})
+                        if target_sub.get('size') != ep.get('sub_size'):
+                            needs_sub = True
+                            
+                    if needs_sub:
+                        client.copy(source_dir, target_dir, [sub_name])
+                        logging.info(f"📝 [STRM] 複製/更新字幕檔: {posixpath.join(target_dir, sub_name)}")
                         
-            # 【精準刪除 + 豁免清單】過濾出多餘的檔案，但排除 NFO 與圖片等元數據
             to_remove = []
             for name in existing_names:
                 if name not in expected_files:
-                    # 取得副檔名並轉為小寫
                     ext = posixpath.splitext(name)[1].lower()
-                    # 如果不是豁免的副檔名，才列入刪除清單
                     if ext not in EXEMPT_EXTS:
                         to_remove.append(name)
 
@@ -893,12 +942,10 @@ class StrmManager:
                 client.remove_files(target_dir, to_remove)
                 logging.info(f"✂️ [STRM] 刪除多餘失效檔案 (已保留豁免檔案): {to_remove}")
                 
-        # 針對 TV 清理多餘的季別資料夾 (保留不變，因為刮削器通常是建立檔案而非隨機資料夾)
         if m_type == 'tv':
             base_dir = StrmManager.get_target_dir(strm_root, m_type, m_name)
             existing_seasons = client.list_files(base_dir)
             if existing_seasons:
-                # 額外過濾掉非季資料夾的元數據資料夾，例如 'extrafanart', 'theme-music'
                 EXEMPT_DIRS = ('extrafanart', 'theme-music', 'backdrops')
                 to_remove_seasons = [
                     f['name'] for f in existing_seasons 
@@ -914,7 +961,6 @@ def sync_all_strm(alist_url, token, strm_path):
     import posixpath, logging
     client = AlistClient(alist_url, token)
     all_media = get_all_media("All", "")
-    base_url = alist_url.rstrip('/')
     count = 0
     valid_movies = set(); valid_tv = set()
     
@@ -922,7 +968,8 @@ def sync_all_strm(alist_url, token, strm_path):
     for media in all_media:
         if media['type'] == 'movie': valid_movies.add(media['name'])
         else: valid_tv.add(media['name'])
-        count += StrmManager.sync_for_media(client, base_url, media, strm_path)
+        # 全量同步傳入 None，觸發大小校驗機制
+        count += StrmManager.sync_for_media(client, alist_url.rstrip('/'), media, strm_path, None)
         
     for cat, valid_set in [('movies', valid_movies), ('tv', valid_tv)]:
         cat_path = posixpath.join(strm_path, cat)
@@ -933,5 +980,5 @@ def sync_all_strm(alist_url, token, strm_path):
                 client.remove_files(cat_path, to_remove)
                 logging.info(f"🗑️ [STRM] 深度清理失效目錄 ({cat}): {to_remove}")
                 
-    logging.info(f"✅ [STRM] 全量同步完成 (共處理 {count} 個項目)")
+    logging.info(f"✅ [STRM] 全量同步完成")
     return count
